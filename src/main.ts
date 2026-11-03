@@ -18,6 +18,7 @@ import {
 } from './machine/tools';
 import { compareStock, parseTarget, threadRanges, type CompareResult, type Target } from './sim/compare';
 import { dxfToTarget } from './sim/dxf';
+import { generateProgram } from './nc/autogen';
 import { Player, STATE_LABEL } from './sim/player';
 import { normalizeStock, protrusionOf, type StockConfig } from './sim/simulator';
 import { SAMPLES } from './samples';
@@ -149,10 +150,26 @@ const editor = new NcEditor(
     save();
     // 치고 있는 줄은 다 치고 넘어갈 때까지 오류를 보여 주지 않는다
     if (editor.view.hasFocus) typingLine = editor.cursorLine;
-    scheduleCompile();
+    if (active !== editor) setActive(editor);
+    else scheduleCompile();
   },
   [codeHover((code) => openCodebook(code))],
 );
+
+// 모범 답안 (읽기 전용). 답안으로 시뮬레이션하는 동안은 active 가 답안 편집기
+const ansEditor = new NcEditor($('editor-ans'), '', () => {}, [codeHover((code) => openCodebook(code))]);
+ansEditor.setReadOnly(true);
+/** 지금 시뮬레이션하는 코드가 들어 있는 편집기 */
+let active: NcEditor = editor;
+function setActive(ed: NcEditor) {
+  if (active === ed) return;
+  active.setExecLine(null);
+  active.setDiagnostics([], []);
+  active = ed;
+  $('run-src').hidden = ed !== ansEditor;
+  $('btn-ans-run').textContent = ed === ansEditor ? '✓ 답안 시뮬레이션 중' : '▶ 답안으로 시뮬레이션';
+  rebuild();
+}
 
 /** 지금 입력 중인 줄 (그 줄의 알람·경고는 잠시 숨긴다) */
 let typingLine: number | null = null;
@@ -286,17 +303,79 @@ splitter.addEventListener('dblclick', () => {
   }
 });
 
-// 왼쪽 탭: 프로그램 / 도면 / 코드 사전
-type Pane = 'prog' | 'dwg' | 'book';
+// 왼쪽 탭: 프로그램 / 도면 / 모범 답안 / 코드 사전
+type Pane = 'prog' | 'dwg' | 'ans' | 'book';
 function showPane(pane: Pane) {
   document.querySelectorAll<HTMLButtonElement>('.pane-tabs button[data-pane]').forEach((x) => x.classList.toggle('active', x.dataset.pane === pane));
   $('editor').hidden = pane !== 'prog';
   $('editor-dwg').hidden = pane !== 'dwg';
   $('dwg-bar').hidden = pane !== 'dwg';
+  $('editor-ans').hidden = pane !== 'ans';
+  $('ans-bar').hidden = pane !== 'ans';
+  $('ans-score').hidden = pane !== 'ans';
   $('codebook').hidden = pane !== 'book';
   if (pane === 'dwg' && !el.cmp.checked) el.cmp.checked = true;
+  // 프로그램 탭으로 돌아오면 다시 내 코드를 시뮬레이션
+  if (pane === 'prog') setActive(editor);
+  if (pane === 'ans') makeAnswer(false);
   lastCmpVersion = -1;
 }
+
+// ---- 모범 답안: 도면 · 소재 · 공구가 바뀌었을 때만 다시 만든다 ----
+let answerKey = '';
+const ansInfo = $('ans-info');
+function makeAnswer(force: boolean) {
+  const input = { drawing: dwgEditor.text, stock: settings.stock, tools: settings.tools, offsets: settings.offsets };
+  const key = JSON.stringify(input);
+  if (!force && key === answerKey) return;
+  answerKey = key;
+  scores.ans = null;
+  try {
+    const r = generateProgram(input);
+    ansEditor.text = r.code;
+    ansInfo.classList.remove('err');
+    ansInfo.textContent = r.grooves.length
+      ? `외경 G71 / G70 · 홈 ${r.grooves.length}곳은 메워서 지나감 (주석 참고)`
+      : '외경 G71 황삭 / G70 정삭 · 절삭 조건은 고정값';
+  } catch (e) {
+    ansEditor.text = '';
+    ansInfo.classList.add('err');
+    ansInfo.textContent = (e as Error).message;
+  }
+  if (active === ansEditor) rebuild();
+  renderScore();
+}
+$('btn-ans-make').onclick = () => makeAnswer(true);
+$('btn-ans-run').onclick = () => {
+  if (!ansEditor.text.trim()) return;
+  if (active === ansEditor) return void player.start();
+  setActive(ansEditor);
+  // 바꾼 직후 미리보기가 방금 시작한 재생을 되돌리지 않게
+  previewDirty = false;
+  el.cmp.checked = true;
+  player.start();
+  active.setReadOnly(true);
+};
+$('btn-ans-copy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(ansEditor.text);
+    ansInfo.classList.remove('err');
+    ansInfo.textContent = '복사했습니다. 프로그램 탭에 붙여 넣을 수 있습니다';
+  } catch {
+    ansInfo.classList.add('err');
+    ansInfo.textContent = '복사하지 못했습니다. 답안 글자를 직접 선택해 주세요';
+  }
+};
+
+/** 끝까지 돌린 결과 (내 코드 / 답안) */
+const scores: Record<'mine' | 'ans', { time: number; excess: number; over: number } | null> = { mine: null, ans: null };
+function renderScore() {
+  const row = (name: string, v: (typeof scores)['mine']) =>
+    `<b>${name}</b> ` +
+    (v ? `가공 시간 ${fmtTime(v.time)} · 남은 살 ${v.excess.toFixed(3)} · 과삭 ${v.over.toFixed(3)} mm` : '아직 끝까지 실행하지 않음');
+  $('ans-score').innerHTML = `${row('내 코드', scores.mine)}<br>${row('모범 답안', scores.ans)}`;
+}
+renderScore();
 document.querySelectorAll<HTMLButtonElement>('.pane-tabs button[data-pane]').forEach((b) => {
   b.onclick = () => {
     showPane(b.dataset.pane as Pane);
@@ -320,7 +399,7 @@ const view2d = new View2D(
     const off = currentOffset();
     el.hover.textContent = `X${(2 * (p.r - off.r)).toFixed(2)}  Z${(p.z - off.z).toFixed(2)}`;
   },
-  (line) => editor.gotoLine(line),
+  (line) => active.gotoLine(line),
 );
 const view3d = new View3D($('view3d'));
 
@@ -333,15 +412,15 @@ function scheduleCompile() {
 }
 
 function rebuild() {
-  prog = compile(editor.text, machineConfig(settings, el.skip.checked));
+  prog = compile(active.text, machineConfig(settings, el.skip.checked));
   const speed = player?.speed ?? 1;
   player = new Player(prog, settings.stock, settings.tools);
   player.speed = speed;
   player.rapidOverride = parseFloat(el.rapidOvr.value) || 1;
   player.singleBlock = el.single.checked;
   player.optionalStop = el.optStop.checked;
-  editor.setReadOnly(false);
-  editor.setExecLine(null);
+  active.setReadOnly(active === ansEditor);
+  active.setExecLine(null);
   renderMessages();
   last3dVersion = -1;
   lastCmpVersion = -1;
@@ -376,6 +455,11 @@ function updateCompare(now: number, running: boolean) {
   const tol = 0.02;
   const ok = cmpResult.maxExcess <= tol && cmpResult.maxOver <= tol;
   const done = player.state === 'done';
+  const who = active === ansEditor ? 'ans' : 'mine';
+  if (done && scores[who]?.time !== prog.duration) {
+    scores[who] = { time: prog.duration, excess: cmpResult.maxExcess, over: cmpResult.maxOver };
+    renderScore();
+  }
   badge.className = 'compare ' + (done ? (ok ? 'good' : 'bad') : '');
   badge.textContent =
     `남은 살 ${cmpResult.maxExcess.toFixed(3)} · 과삭 ${cmpResult.maxOver.toFixed(3)} mm` +
@@ -410,7 +494,7 @@ function renderMessages() {
     li.querySelector('.code')!.textContent = a.code;
     li.querySelector('.ln')!.textContent = `${a.line + 1}행`;
     li.querySelector('.msg')!.textContent = a.message;
-    li.onclick = () => editor.gotoLine(a.line);
+    li.onclick = () => active.gotoLine(a.line);
     el.messages.append(li);
   }
   const alarms = list.filter((a) => a.level === 'alarm').length;
@@ -418,7 +502,7 @@ function renderMessages() {
   el.msgCount.textContent = list.length ? `알람 ${alarms} · 경고 ${warns}` : '';
   const busy = player.state === 'run' || player.state === 'hold' || player.state === 'stop';
   el.progInfo.textContent = busy ? '· 줄을 클릭하면 그 블록부터 재생' : `· 예상 가공 시간 ${fmtTime(prog.duration)}`;
-  editor.setDiagnostics(
+  active.setDiagnostics(
     list.filter((a) => a.level === 'alarm').map((a) => a.line),
     list.filter((a) => a.level === 'warning').map((a) => a.line),
   );
@@ -468,7 +552,8 @@ function updatePreview() {
   }
   if (player.state !== 'ready') return;
   const before = player.alarm;
-  player.setPreview(cursorTime(editor.cursorLine));
+  // 답안은 커서 미리보기 없이 처음 상태로
+  player.setPreview(active === editor ? cursorTime(editor.cursorLine) : 0);
   if (player.alarm !== before) renderMessages();
   lastCmpVersion = -1;
 }
@@ -507,7 +592,7 @@ function updateUi(now: number, dt: number) {
   el.coolant.textContent = snap?.coolant && !ended ? 'ON' : 'OFF';
   el.time.textContent = `${fmtTime(player.viewTime)} / ${fmtTime(prog.duration)}`;
   el.modal.textContent = snap ? snap.modal.join(' ') : 'G00 G97 G99 G21 G40 G18 G54';
-  el.block.textContent = seg && (running || previewing || st === 'alarm' || st === 'done') ? editor.view.state.doc.line(seg.line + 1).text : '';
+  el.block.textContent = seg && (running || previewing || st === 'alarm' || st === 'done') ? active.view.state.doc.line(seg.line + 1).text : '';
   // 사이클 안의 동작(코드에 안 보이는 후퇴·복귀)은 설명을 같이 보여 준다
   el.note.textContent = seg?.note && (running || previewing || st === 'alarm') ? '↳ ' + seg.note : '';
 
@@ -517,15 +602,15 @@ function updateUi(now: number, dt: number) {
     el.start.disabled = st === 'run';
     el.hold.disabled = st !== 'run';
     el.finish.disabled = st === 'run';
-    editor.setReadOnly(running);
+    active.setReadOnly(running || active === ansEditor);
     el.progInfo.textContent = running
       ? '· 줄을 클릭하면 그 블록부터 재생'
       : `· 예상 가공 시간 ${fmtTime(prog.duration)}`;
     if (st === 'alarm' || st === 'done') renderMessages();
   }
-  if (running) editor.setExecLine(seg?.line ?? null);
-  else if (st === 'alarm' && player.alarm) editor.setExecLine(player.alarm.line);
-  else editor.setExecLine(null);
+  if (running) active.setExecLine(seg?.line ?? null);
+  else if (st === 'alarm' && player.alarm) active.setExecLine(player.alarm.line);
+  else active.setExecLine(null);
 
   // 2D
   const shape = seg ? player.sim.shapeFor(seg.tool) ?? null : null;
@@ -573,7 +658,7 @@ el.start.onclick = () => {
   finishTyping();
   player.start();
   // 다음 화면 갱신을 기다리지 않고 바로 '줄 클릭 = 그 블록부터 재생' 상태로
-  editor.setReadOnly(true);
+  active.setReadOnly(true);
 };
 el.hold.onclick = () => player.hold();
 el.reset.onclick = () => {
@@ -629,7 +714,7 @@ function lineStartTime(line: number): number | null {
   return best?.start ?? null;
 }
 
-editor.onLineClick = (line) => {
+editor.onLineClick = ansEditor.onLineClick = (line) => {
   const t = lineStartTime(line);
   if (t === null) return;
   player.seek(t);

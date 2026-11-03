@@ -782,6 +782,34 @@ button.step {
 .dwg-bar .err {
   color: #ff5d5d;
 }
+.ans-bar {
+  flex-wrap: wrap;
+}
+.ans-score {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  color: #c4cfdb;
+  line-height: 1.6;
+}
+.ans-score[hidden] {
+  display: none;
+}
+.ans-score b {
+  color: var(--text);
+}
+.run-src {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: #3a2a0f;
+  color: #ffb547;
+}
+.run-src[hidden] {
+  display: none;
+}
 body.dropping::after {
   content: 'DXF 파일을 놓으면 도면으로 불러옵니다';
   position: fixed;

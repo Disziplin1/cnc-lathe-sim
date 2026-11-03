@@ -26,16 +26,22 @@ export interface CompareResult {
 
 const dist = (a: Vec, b: Vec) => Math.hypot(b.z - a.z, b.r - a.r);
 
+/** 도면 한 줄의 이동 (직선, 또는 중심 c 를 도는 원호) */
+export type DrawingMove =
+  | { kind: 'line'; a: Vec; b: Vec }
+  | { kind: 'arc'; a: Vec; b: Vec; c: Vec; ccw: boolean };
+
 /**
- * 도면 형상 해석. 형식은 G코드와 같다 (X 직경, Z, G01 / G02 / G03 R 또는 I K).
- * 첫 줄은 시작점 (보통 X0. Z0.).
+ * 도면 텍스트 → 이동 목록 (적힌 순서 그대로).
+ * 형식은 G코드와 같다 (X 직경, Z, G01 / G02 / G03 R 또는 I K). 첫 줄은 시작점 (보통 X0. Z0.).
  */
-export function parseTarget(text: string): { target: Target | null; error: Alarm | null } {
+export function drawingMoves(text: string): { moves: DrawingMove[]; error: Alarm | null } {
   const blocks = lex(text, 'mm', []);
-  const pts: Vec[] = [];
+  const moves: DrawingMove[] = [];
+  let cur: Vec | null = null;
   let g = 'G01';
   for (const b of blocks) {
-    const fail = (message: string) => ({ target: null, error: { code: 'DWG', message, line: b.line, level: 'alarm' as const } });
+    const fail = (message: string) => ({ moves: [], error: { code: 'DWG', message, line: b.line, level: 'alarm' as const } });
     if (b.error) return fail(b.error.message);
     const w = new Map<string, Word>();
     for (const word of b.words) {
@@ -46,13 +52,12 @@ export function parseTarget(text: string): { target: Target | null; error: Alarm
       } else w.set(word.letter, word);
     }
     if (!(w.has('X') || w.has('Z') || w.has('U') || w.has('W'))) continue;
-    const cur = pts[pts.length - 1];
     if (!cur) {
       if (!w.has('X') || !w.has('Z')) return fail('첫 점은 X 와 Z 를 모두 써야 합니다 (예: X0. Z0.)');
-      pts.push({ z: w.get('Z')!.value, r: w.get('X')!.value / 2 });
+      cur = { z: w.get('Z')!.value, r: w.get('X')!.value / 2 };
       continue;
     }
-    const e = { ...cur };
+    const e: Vec = { ...cur };
     if (w.has('X')) e.r = w.get('X')!.value / 2;
     else if (w.has('U')) e.r += w.get('U')!.value / 2;
     if (w.has('Z')) e.z = w.get('Z')!.value;
@@ -71,9 +76,29 @@ export function parseTarget(text: string): { target: Target | null; error: Alarm
       } else if (w.has('I') || w.has('K')) {
         c = { z: cur.z + (w.get('K')?.value ?? 0), r: cur.r + (w.get('I')?.value ?? 0) };
       } else return fail('G02/G03 에는 R 또는 I/K 가 필요합니다');
-      pts.push(...arcPoints(cur, e, c, ccw).slice(1));
-    } else if (dist(cur, e) > 1e-9) pts.push(e);
+      moves.push({ kind: 'arc', a: cur, b: e, c, ccw });
+    } else if (dist(cur, e) > 1e-9) moves.push({ kind: 'line', a: cur, b: e });
+    cur = e;
   }
+  return { moves, error: null };
+}
+
+/** 이동 목록 → 점 목록 (원호는 잘게 나눔) */
+export function movePoints(moves: DrawingMove[]): Vec[] {
+  if (!moves.length) return [];
+  const pts: Vec[] = [moves[0].a];
+  for (const m of moves) {
+    if (m.kind === 'arc') pts.push(...arcPoints(m.a, m.b, m.c, m.ccw).slice(1));
+    else pts.push(m.b);
+  }
+  return pts;
+}
+
+/** 도면 형상 해석 → 비교용 목표 형상 */
+export function parseTarget(text: string): { target: Target | null; error: Alarm | null } {
+  const { moves, error } = drawingMoves(text);
+  if (error) return { target: null, error };
+  const pts = movePoints(moves);
   if (pts.length < 2) return { target: null, error: null };
 
   // 끝면(+Z) → 척(-Z) 방향으로 맞춘다

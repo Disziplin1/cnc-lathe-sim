@@ -1023,14 +1023,29 @@ class Interpreter {
         }
         paths[nx.m].push(An);
       } else {
-        // 오목 모서리: 두 보정선의 교점
-        const den = d1.z * d2.r - d1.r * d2.z;
-        const t = ((An.z - Bk.z) * d2.r - (An.r - Bk.r) * d2.z) / den;
-        const X = { z: Bk.z + d1.z * t, r: Bk.r + d1.r * t };
-        paths[s.m].push(X);
-        if (nx.m !== s.m) paths[nx.m].push(X);
+        // 오목 모서리: 일단 두 보정선 끝을 그대로 잇는다. 꼬인 부분(교점)은 아래에서 한꺼번에 잘라낸다
+        paths[s.m].push(Bk);
+        paths[nx.m].push(An);
       }
     }
+
+    // 오목 모서리에서 보정선끼리 엇갈려 생긴 고리를 교점에서 잘라낸다.
+    // 원호를 잘게 나눈 조각 여러 개를 넘어가는 경우(직선 → 원호, 원호 → 벽)도 같이 처리된다.
+    // (급속 이동끼리는 원래 엇갈릴 수 있으니 둘 중 하나는 절삭 이동일 때만)
+    const flat = paths.flatMap((pth, mi) => pth.map((p) => ({ p, m: mi })));
+    const feedSeg = (k: number) => body[flat[k + 1].m].kind !== 'rapid';
+    for (let i = 0; i + 1 < flat.length; i++) {
+      for (let j = Math.min(flat.length - 2, i + 400); j >= i + 2; j--) {
+        if (!feedSeg(i) && !feedSeg(j)) continue;
+        const X = segCross(flat[i].p, flat[i + 1].p, flat[j].p, flat[j + 1].p);
+        if (X) {
+          flat.splice(i + 1, j - i, { p: X, m: flat[i + 1].m });
+          break;
+        }
+      }
+    }
+    paths.forEach((pth) => (pth.length = 0));
+    for (const f of flat) paths[f.m].push(f.p);
 
     // 노즈 중심 경로 → 가상 인선점 경로
     const tipPaths = paths.map((pth) => pth.map((p) => add(p, tip)));
@@ -1063,4 +1078,17 @@ export function arcPoints(s: Vec, e: Vec, c: Vec, ccw: boolean): Vec[] {
   }
   pts.push({ ...e });
   return pts;
+}
+
+/** 두 선분이 끝점이 아닌 곳에서 만나면 그 점 */
+function segCross(a: Vec, b: Vec, c: Vec, d: Vec): Vec | null {
+  const r = { z: b.z - a.z, r: b.r - a.r };
+  const s = { z: d.z - c.z, r: d.r - c.r };
+  const den = r.z * s.r - r.r * s.z;
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((c.z - a.z) * s.r - (c.r - a.r) * s.z) / den;
+  const u = ((c.z - a.z) * r.r - (c.r - a.r) * r.z) / den;
+  const e = 1e-9;
+  if (t <= e || t >= 1 - e || u <= e || u >= 1 - e) return null;
+  return { z: a.z + r.z * t, r: a.r + r.r * t };
 }

@@ -24,6 +24,7 @@
         <div class="pane-tabs">
           <button data-pane="prog" class="active">프로그램</button>
           <button data-pane="dwg" title="완성품 외곽선. 깎은 결과와 비교합니다">도면 (목표 형상)</button>
+          <button data-pane="ans" title="도면 형상으로 만든 외경 G71 황삭 · G70 정삭 프로그램. 내 코드와 비교해 보세요">모범 답안</button>
           <button data-pane="book" title="G코드·M코드 설명과 검색">코드 사전</button>
           <span id="prog-info" class="muted"></span>
         </div>
@@ -35,6 +36,14 @@
           <input type="file" id="file-dxf" accept=".dxf,.DXF" hidden />
         </div>
         <div id="editor-dwg" class="editor" hidden></div>
+        <div id="ans-bar" class="dwg-bar ans-bar" hidden>
+          <button id="btn-ans-run" class="primary" title="이 답안을 시뮬레이션합니다. 프로그램 탭으로 돌아가면 다시 내 코드로 바뀝니다">▶ 답안으로 시뮬레이션</button>
+          <button id="btn-ans-make" title="지금 도면 · 소재 · 공구 설정으로 다시 만듭니다">다시 만들기</button>
+          <button id="btn-ans-copy" title="답안 코드를 클립보드에 복사">복사</button>
+          <span id="ans-info" class="muted"></span>
+        </div>
+        <div id="ans-score" class="ans-score" hidden></div>
+        <div id="editor-ans" class="editor" hidden></div>
         <div id="codebook" class="codebook" hidden></div>
         <div class="pane-title">알람 / 경고 <span id="msg-count" class="muted"></span></div>
         <ul id="messages" class="messages"></ul>
@@ -48,6 +57,7 @@
           <button data-view="both">둘 다</button>
           <label class="check" title="도면 탭의 목표 형상과 비교"><input type="checkbox" id="chk-compare" /> 도면 비교</label>
           <span id="compare" class="compare"></span>
+          <span id="run-src" class="run-src" hidden>모범 답안 실행 중</span>
           <span class="spacer"></span>
           <span id="hover" class="muted mono"></span>
           <button id="btn-fit" title="전체 보기">⤢ 맞춤</button>
