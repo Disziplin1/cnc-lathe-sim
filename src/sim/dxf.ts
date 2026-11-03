@@ -135,6 +135,8 @@ interface Parsed {
   texts: { text: string; p: P }[];
   /** 해치 가운데 · 지시선 화살표 끝 */
   marks: P[];
+  /** 지시선: 화살표 끝(tip) 과 글자 쪽 끝(tail) */
+  leaders: { tip: P; tail: P }[];
 }
 
 /** MTEXT 서식 코드 지우기 (글꼴·크기 지정, 중괄호, 줄바꿈), %%c → Ø */
@@ -156,6 +158,7 @@ function toPrims(src: string): Parsed {
   const allLines: Parsed['allLines'] = [];
   const texts: Parsed['texts'] = [];
   const marks: P[] = [];
+  const leaders: Parsed['leaders'] = [];
 
   const styleOf = (e: RawEntity) => {
     const layer = e.codes.find(([c]) => c === 8)?.[1] ?? '';
@@ -218,14 +221,32 @@ function toPrims(src: string): Parsed {
       const [cx, cy] = e.type === 'DIMENSION' ? [11, 21] : [10, 20];
       texts.push({ text, p: { x: fx * num(e, cx) * k, y: num(e, cy) * k } });
     } else if (e.type === 'MULTILEADER') {
-      // 다중 지시선: 글자(304) 와 첫 점(대략 화살표 쪽)
-      const text = plainText(e.codes.filter(([c]) => c === 304).map(([, v]) => v).join(''));
-      const p = { x: fx * num(e, 10) * k, y: num(e, 20) * k };
-      if (text) texts.push({ text, p });
-      marks.push(p);
+      // 다중 지시선: 첫 304 = 글자, 첫 10/20 = 글자 위치.
+      // "LEADER{" 다음 점 = 글자 쪽 끝, "LEADER_LINE{" 다음 점 = 화살표 끝
+      const pt = (from: number): P | null => {
+        const i = e.codes.findIndex(([c], j) => j > from && c === 10);
+        const j = e.codes.findIndex(([c], jj) => jj > i && c === 20);
+        return i < 0 || j < 0 ? null : { x: fx * parseFloat(e.codes[i][1]) * k, y: parseFloat(e.codes[j][1]) * k };
+      };
+      const first304 = e.codes.find(([c]) => c === 304)?.[1] ?? '';
+      const text = /\{$/.test(first304) ? '' : plainText(first304);
+      const p = pt(-1);
+      if (p && text) texts.push({ text, p });
+      const tail = pt(e.codes.findIndex(([c, v]) => c === 302 && v === 'LEADER{'));
+      const tip = pt(e.codes.findIndex(([c, v]) => c === 304 && v === 'LEADER_LINE{'));
+      if (tip) marks.push(tip);
+      if (tip && tail) leaders.push({ tip, tail });
     } else if (e.type === 'LEADER') {
-      // 첫 꼭짓점 = 화살표 끝
-      marks.push({ x: fx * num(e, 10) * k, y: num(e, 20) * k });
+      // 첫 꼭짓점 = 화살표 끝, 마지막 꼭짓점 = 글자 쪽
+      const vs: P[] = [];
+      for (const [c, v] of e.codes) {
+        if (c === 10) vs.push({ x: fx * parseFloat(v) * k, y: 0 });
+        else if (c === 20 && vs.length) vs[vs.length - 1].y = parseFloat(v) * k;
+      }
+      if (vs.length) {
+        marks.push(vs[0]);
+        leaders.push({ tip: vs[0], tail: vs[vs.length - 1] });
+      }
     } else if (e.type === 'HATCH') {
       // 첫 10/20 은 높이 기준점이라 빼고, 경계 점들의 가운데
       const xs: number[] = [];
@@ -244,7 +265,7 @@ function toPrims(src: string): Parsed {
         marks.push({ x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 });
     }
   }
-  return { prims, axis: axis ? axis.y : null, allLines, texts, marks };
+  return { prims, axis: axis ? axis.y : null, allLines, texts, marks, leaders };
 }
 
 function pushPoly(prims: Prim[], vs: { p: P; bulge: number }[], closed: boolean) {
@@ -597,21 +618,28 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
     }
   }
   let knurls = 0;
+  const dist = (a: P, b: P) => Math.hypot(a.x - b.x, a.y - b.y);
+  // 지시선은 글자 쪽 끝이 가장 가까운 글자의 것으로 본다
+  const owner = (l: { tail: P }) => parsed.texts.reduce((best, t) => (dist(l.tail, t.p) < dist(l.tail, best.p) ? t : best));
   for (const t of parsed.texts) {
     if (!/KNURL|널링|ローレット/i.test(t.text)) continue;
-    // 글자에서 가장 가까운 해치 · 지시선 끝, 없으면 글자 위치
-    const near = parsed.marks.length
-      ? parsed.marks.reduce((best, q) => (Math.hypot(q.x - t.p.x, q.y - t.p.y) < Math.hypot(best.x - t.p.x, best.y - t.p.y) ? q : best))
-      : t.p;
-    const z = toZ(near);
     if (!zLines.length) continue;
-    // 해치는 일부만 그리는 기호이므로 그 지름 구간 전체를 널링한다
-    const seg = zLines.reduce((best, l) => (gapTo(z, l) < gapTo(z, best) ? l : best));
-    const line = knurlLine({ z0: seg.z0, z1: seg.z1 });
-    if (!seen.has(line)) {
-      seen.add(line);
-      notes.push(line);
-      knurls++;
+    // 이 글자의 지시선 화살표가 가리키는 곳마다 (화살표가 여러 개면 여러 곳).
+    // 지시선이 없으면 가장 가까운 해치 · 화살표, 그것도 없으면 글자 위치
+    let points = parsed.leaders.filter((l) => owner(l) === t && dist(l.tail, t.p) < 30).map((l) => l.tip);
+    if (!points.length)
+      points = [parsed.marks.length ? parsed.marks.reduce((best, q) => (dist(q, t.p) < dist(best, t.p) ? q : best)) : t.p];
+    for (const q of points) {
+      const z = toZ(q);
+      const r = toR(q);
+      // 해치·화살표는 일부만 표시하는 기호이므로 그 지름 구간 전체를 널링한다 (Z 가 걸치고 지름이 가까운 구간)
+      const seg = zLines.reduce((best, l) => (gapTo(z, l) * 10 + Math.abs(l.r - r) < gapTo(z, best) * 10 + Math.abs(best.r - r) ? l : best));
+      const line = knurlLine({ z0: seg.z0, z1: seg.z1 });
+      if (!seen.has(line)) {
+        seen.add(line);
+        notes.push(line);
+        knurls++;
+      }
     }
   }
   return { text: [head, ...out, ...notes].join('\n') + '\n', maxDia, length, lines, arcs, threads, knurls };

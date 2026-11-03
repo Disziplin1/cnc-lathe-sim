@@ -193,6 +193,14 @@ describe('DXF 나사 · 널링 글자 찾기', () => {
     sameProfile(r.text, 'X0. Z0.\nX5.\nX6. Z-0.5\nZ-32.\nX15.\nZ-92.\n');
   });
 
+  it('KNURLING 글자 하나에 화살표가 둘이면 두 구간 모두 널링', () => {
+    const two: Ent[] = [...ents, ['LEADER', [[8, 'DIM'], [10, 70], [20, ax + 3], [10, 26], [20, ax + 19]]]];
+    const r = dxfToTarget(dxf(two, [['CENTER', 'CENTER']]));
+    expect(r.knurls).toBe(2);
+    expect(r.text).toContain('(널링 Z-32. ~ Z-92.)');
+    expect(r.text).toContain('(널링 Z-0.5 ~ Z-32.)');
+  });
+
   it('글자가 없으면 나사 · 널링 줄도 없다', () => {
     const r = dxfToTarget(dxf(ents.filter((e) => e[0] === 'LINE'), [['CENTER', 'CENTER']]));
     expect(r.threads + r.knurls).toBe(0);
