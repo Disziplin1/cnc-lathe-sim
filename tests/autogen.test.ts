@@ -133,17 +133,42 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(res.maxExcess).toBeLessThan(0.02);
   });
 
-  it('막힌 구멍 Ø16 깊이 15 (바닥 평평): 드릴 끝을 바닥에 맞추고 보링으로 벽 · 바닥 정리', () => {
-    const drawing = ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', 'X16. Z0.', 'Z-15.', 'X0.'].join('\n');
-    const { gen, res } = run(drawing, 12);
+  it('막힌 구멍 Ø24 깊이 15 (바닥 평평): 드릴 끝을 바닥에 맞추고 보링으로 벽 · 바닥 정리', () => {
+    const drawing = ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', 'X24. Z0.', 'Z-15.', 'X0.'].join('\n');
+    const { gen, res } = run(drawing, 18);
     expect(gen.code).toContain('G74 Z-15. Q5000');
-    expect(gen.code).toContain('N40 G01 X11. ;');
+    expect(gen.code).toContain('N40 G01 X17. ;');
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.02);
   });
 
-  it('드릴이 구멍보다 크면 알맞은 지름을 알려 준다', () => {
-    const drawing = ['X22. Z0.', 'X40.', 'Z-30.', '(내경)', 'X20. Z0.', 'Z-30.'].join('\n');
-    expect(() => generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets })).toThrow(/T11 드릴 지름을 Ø18 이하로/);
+  it('구멍과 같은 지름의 드릴이면 드릴로만 뚫는다 (막힌 Ø11 깊이 6.5)', () => {
+    const drawing = ['X0. Z0.', 'X22.', 'Z-30.', '(내경)', 'X11. Z0.', 'Z-6.5', 'X0.'].join('\n');
+    const tools = withDrill(11);
+    const gen = generateProgram({ drawing, stock, tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('G74 Z-9.805 Q5000 F0.1 ;');
+    expect(gen.code).not.toContain('G71 P30');
+    const p = compile(gen.code, { ...cfg, tools });
+    const sim = new CutSim(p, stock, tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+  });
+
+  it('보링바가 들어가지 못하면 실행하기 전에 알려 준다', () => {
+    const gen = (hole: number, drill: number) => () =>
+      generateProgram({ drawing: ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', `X${hole}. Z0.`, 'Z-10.', 'X0.'].join('\n'), stock, tools: withDrill(drill), offsets: cfg.offsets });
+    // 드릴 구멍이 작아서 보링바가 못 들어감 → 들어갈 수 있는 드릴 범위
+    expect(gen(30, 12)).toThrow(/Ø16 ~ Ø28 로 바꿔/);
+    // 구멍 자체가 작음 → 구멍과 같은 드릴로만
+    expect(gen(11, 8)).toThrow(/너무 작습니다.*T11 드릴을 구멍과 같은 Ø11. 로 바꾸면/);
+    // 드릴이 구멍보다 큼
+    expect(gen(20, 22)).toThrow(/T11 드릴 지름을 Ø18 이하로/);
+  });
+
+  it('보링바가 구멍보다 크면 시뮬레이션에서 축 건너편 충돌 알람', () => {
+    const tools = withDrill(8);
+    const code = ['G28 U0. W0. ;', 'T1100 ;', 'G97 S500 M03 ;', 'G00 X0. Z5. T1111 ;', 'G01 Z-6.5 F0.1 ;', 'G00 Z5. ;', 'T0900 ;', 'G00 X7. Z2. T0909 ;', 'G01 Z-6. F0.1 ;', 'M30 ;'].join('\n');
+    const p = compile(code, { ...cfg, tools });
+    const sim = new CutSim(p, stock, tools);
+    expect(sim.advanceTo(p.duration)?.code).toBe('SIM04');
   });
 });

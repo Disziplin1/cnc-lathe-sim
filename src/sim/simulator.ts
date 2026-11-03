@@ -1,6 +1,6 @@
 import type { Alarm, Program, Segment, Vec } from '../nc/types';
 import { toolShape, type ToolDef } from '../machine/tools';
-import { bounds, boxOverlap, difference, fromPath, hull, intersectArea, intersection, toPath, translate, type Box, type Paths } from './geometry';
+import { bounds, boxOverlap, difference, fromPath, hull, intersectArea, intersection, rect, toPath, translate, type Box, type Paths } from './geometry';
 
 export interface StockConfig {
   /** 소재 지름 Ø */
@@ -89,6 +89,7 @@ export class CutSim {
   private stockBox!: Box;
   private shapes = new Map<number, Vec[]>();
   private knurlTools = new Set<number>();
+  private drillTools = new Set<number>();
   private segIdx = 0;
   private edgeIdx = 1;
   private lastPt: Vec | null = null;
@@ -103,6 +104,7 @@ export class CutSim {
     for (const t of tools) {
       this.shapes.set(t.no, toolShape(t));
       if (t.type === 'knurl') this.knurlTools.add(t.no);
+      if (t.type === 'drill') this.drillTools.add(t.no);
     }
     this.reset();
   }
@@ -215,14 +217,31 @@ export class CutSim {
         this.cut(sweep);
         return alarmAt(s, 'SIM02', '급속이송(G00) 중에 공작물과 충돌했습니다');
       }
-      return null;
+      return this.farSide(s, sweep, box);
     }
     if (this.knurlTools.has(s.tool)) {
       this.knurl(sweep, box);
       return null;
     }
     this.cut(sweep, box);
-    return null;
+    return this.farSide(s, sweep, box);
+  }
+
+  /**
+   * 축(X0) 건너편으로 넘어간 공구 부분은 반대쪽 공작물(구멍 반대편 벽)에 닿는다.
+   * 단면은 위쪽 반만 계산하므로 넘어간 부분을 위로 뒤집어 남은 소재와 겹치는지 본다.
+   * 드릴은 원래 축 양쪽을 같이 깎으므로 제외.
+   */
+  private farSide(s: Segment, sweep: Vec[], box: Box): Alarm | null {
+    if (box.minR > -0.05 || this.drillTools.has(s.tool)) return null;
+    const below = intersection([toPath(sweep)], [rect(box.minZ - 1, box.maxZ + 1, box.minR - 1, 0)]);
+    const flipped = below.map((p) => toPath(fromPath(p).map((q) => ({ z: q.z, r: -q.r })).reverse()));
+    if (!flipped.length || intersectArea(this.stock, flipped) <= 0.05) return null;
+    return alarmAt(
+      s,
+      'SIM04',
+      '공구가 축 건너편(구멍 반대쪽 벽)과 충돌했습니다. 구멍이 보링바보다 작거나, 공구가 중심을 너무 많이 넘어갔습니다',
+    );
   }
 
   /** 널링: 롤러가 소재를 누른 Z 구간을 기록한다 (지름 변화는 무시) */

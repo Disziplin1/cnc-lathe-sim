@@ -87,6 +87,8 @@ export class Player {
   /** 결과 바로 보기: 정지 없이 끝까지 */
   finish() {
     if (this.state === 'done' || this.state === 'alarm') this.reset();
+    // 미리보기로 깎아둔(또는 미리보기에서 충돌로 멈춘) 소재는 버리고 처음부터
+    if (this.state === 'ready' && this.preview !== null) this.reset();
     this.advance(Infinity, false);
   }
 
