@@ -827,7 +827,7 @@ $('btn-settings').onclick = () => {
   for (let n = 1; n <= MAX_TOOLS; n++) {
     const t = settings.tools.find((x) => x.no === n);
     const tr = document.createElement('tr');
-    const opts = (['', 'rough', 'finish', 'groove', 'thread', 'ithread', 'boring', 'drill', 'knurl'] as const)
+    const opts = (['', 'rough', 'finish', 'groove', 'igroove', 'thread', 'ithread', 'boring', 'drill', 'knurl'] as const)
       .map((k) => `<option value="${k}" ${(t?.type ?? '') === k ? 'selected' : ''}>${k ? TOOL_LABEL[k] : '— 없음 —'}</option>`)
       .join('');
     tr.innerHTML = `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td><td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td><td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>`;

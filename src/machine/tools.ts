@@ -1,6 +1,6 @@
 import type { Vec } from '../nc/types';
 
-export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl' | 'ithread';
+export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl' | 'ithread' | 'igroove';
 
 export interface ToolDef {
   no: number;
@@ -31,6 +31,7 @@ export const TOOL_LABEL: Record<ToolType, string> = {
   boring: '보링바 (내경, 55°)',
   knurl: '널링 (롤러)',
   ithread: '내경 나사 바이트 (60°)',
+  igroove: '내경 홈 바이트',
 };
 
 export const TOOL_COLOR: Record<ToolType, string> = {
@@ -42,10 +43,11 @@ export const TOOL_COLOR: Record<ToolType, string> = {
   boring: '#5ee6e6',
   knurl: '#e8c547',
   ithread: '#a98bff',
+  igroove: '#ffd27a',
 };
 
 /** 폭/직경 칸을 쓰는 공구 */
-export const USES_WIDTH: ToolType[] = ['groove', 'drill', 'knurl'];
+export const USES_WIDTH: ToolType[] = ['groove', 'igroove', 'drill', 'knurl'];
 /** 노즈 반경이 있는 공구 */
 export const USES_NOSE: ToolType[] = ['rough', 'finish', 'boring'];
 
@@ -57,6 +59,7 @@ export function defaultTools(): ToolDef[] {
     { no: 1, type: 'rough', width: 3, noseR: 0.8 },
     { no: 3, type: 'finish', width: 3, noseR: 0.4 },
     { no: 5, type: 'groove', width: 3, noseR: 0 },
+    { no: 6, type: 'igroove', width: 2, noseR: 0 },
     { no: 7, type: 'thread', width: 3, noseR: 0 },
     { no: 8, type: 'ithread', width: 3, noseR: 0 },
     { no: 9, type: 'boring', width: 3, noseR: 0.4 },
@@ -77,6 +80,7 @@ export function defaultOffsets(): ToolOffset[] {
 const ADDED_LATER: ToolDef[] = [
   { no: 12, type: 'knurl', width: 8, noseR: 0 },
   { no: 8, type: 'ithread', width: 3, noseR: 0 },
+  { no: 6, type: 'igroove', width: 2, noseR: 0 },
 ];
 
 /** 저장된 예전 설정에 빠진 값 채우기 */
@@ -185,6 +189,16 @@ export function toolShape(t: ToolDef): Vec[] {
         { z: half, r: 12 },
         { z: -half, r: 12 },
         { z: -half, r: h },
+      ];
+    }
+    case 'igroove': {
+      // 외경 홈 바이트를 뒤집은 모양: 기준점 = 위쪽(구멍 벽 쪽) 척 쪽 모서리, 날폭은 +Z, 몸체는 아래로 짧게
+      const w = t.width > 0 ? t.width : 2;
+      return [
+        { z: 0, r: 0 },
+        { z: 0, r: -6 },
+        { z: w, r: -6 },
+        { z: w, r: 0 },
       ];
     }
     case 'ithread': {

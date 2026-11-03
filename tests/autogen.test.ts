@@ -41,19 +41,18 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     expect(res.maxOver).toBeLessThan(0.02);
   });
 
-  it('홈이 있는 도면: 홈은 메우고 주석으로 알린다', () => {
+  it('홈이 있는 도면: G71 · G70 은 메워서 지나가고 정삭 뒤 홈 바이트 G75 로 깎는다', () => {
     const drawing = SAMPLES.find((s) => s.id === 'multi')!.target!;
     const { gen, res } = cut(drawing);
     expect(gen.grooves).toHaveLength(1);
     expect(gen.grooves[0].z0).toBeCloseTo(-18, 3);
     expect(gen.grooves[0].z1).toBeCloseTo(-22, 3);
     expect(gen.grooves[0].minDia).toBeCloseTo(16, 3);
-    expect(gen.code).toMatch(/\(홈 Z-18\. ~ Z-22\. 최소 Ø16\./);
+    expect(gen.code).toContain('(홈 Z-18. ~ Z-22. Ø16. : 홈 바이트 폭 3');
+    expect(gen.code).toContain('Z-21. ;');
+    expect(gen.code).toContain('G75 X16. Z-22. P1000 Q2400 F0.07 ;');
     expect(res.maxOver).toBeLessThan(0.02);
-    // 남은 살은 홈 자리만
-    expect(res.maxExcess).toBeGreaterThan(0.1);
-    expect(res.excessAt!.z).toBeLessThan(-17.9);
-    expect(res.excessAt!.z).toBeGreaterThan(-22.1);
+    expect(res.maxExcess).toBeLessThan(0.02);
   });
 
   it('척 쪽에서 오목하게 끝나는 원호도 일부만 깎고 메운다', () => {
@@ -187,5 +186,22 @@ describe('모범 답안: 내경 나사 (암나사)', () => {
     expect(Math.max(...th.map((s) => s.pts[1].r))).toBeCloseTo(10, 3);
     const sim = new CutSim(p, stock, tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
+  });
+});
+
+describe('모범 답안: 내경 홈', () => {
+  it('구멍 안쪽 홈은 보링 뒤 내경 홈 바이트 G75 로 깎는다', () => {
+    const drawing = ['X30. Z0.', 'X40.', 'Z-30.', '(내경)', 'X30. Z0.', 'Z-10.', 'X34.', 'Z-13.', 'X30.', 'Z-30.'].join('\n');
+    const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('T0600 ;');
+    expect(gen.code).toContain('G00 X28. Z5. T0606 M08 ;');
+    expect(gen.code).toContain('G75 X34. Z-13. P1000 Q1600 F0.07 ;');
+    const p = compile(gen.code, cfg);
+    expect(p.alarm).toBeNull();
+    const sim = new CutSim(p, stock, cfg.tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+    const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.02);
   });
 });

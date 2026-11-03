@@ -137,6 +137,7 @@ function buildTool(def: ToolDef, shape: Vec[], color: string): THREE.Group {
       g.add(box(zMin - 2, zMax + 18, 28, 100, -22, 3, holderMat));
       break;
     }
+    case 'igroove':
     case 'ithread': {
       // 날 + 구멍 안으로 들어가는 가는 바 (축 = 날 끝보다 4 아래)
       g.add(plate(shape, -1.5, 1.5, tipMat));

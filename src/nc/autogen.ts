@@ -14,9 +14,24 @@ import { coarsePitch, parseFeatures } from '../sim/features';
 export interface AutoProgram {
   code: string;
   /** 건너뛴 홈 (Z 큰 쪽 → 작은 쪽, 가장 깊은 직경) */
-  grooves: { z0: number; z1: number; minDia: number }[];
+  grooves: Groove[];
   /** 내경(드릴 · 보링)도 넣었는지 */
   bore: boolean;
+}
+
+/**
+ * G71 이 메워서 지나간 홈 (끝면 쪽 z0 → 척 쪽 z1).
+ * 내경은 반경 부호를 뒤집어 계산하므로 minDia · level 도 뒤집힌 값.
+ */
+export interface Groove {
+  z0: number;
+  z1: number;
+  /** 가장 깊은 곳의 지름 */
+  minDia: number;
+  /** 메운 높이(반경) */
+  level: number;
+  /** 척 쪽 끝까지 다시 올라오지 않음 (끝 모따기·단) */
+  toEnd: boolean;
 }
 
 export interface AutoInput {
@@ -104,11 +119,11 @@ function envelope(moves: DrawingMove[]): { out: DrawingMove[]; grooves: AutoProg
       // 척 쪽 끝까지 다시 올라오지 않음 → 그 높이로 끝까지
       const endZ = rest[rest.length - 1].b.z;
       out.push({ kind: 'line', a: q, b: { z: endZ, r: q.r } });
-      grooves.push({ z0: q.z, z1: endZ, minDia: 2 * minR });
+      grooves.push({ z0: q.z, z1: endZ, minDia: 2 * minR, level: q.r, toEnd: true });
       break;
     }
     out.push({ kind: 'line', a: q, b: hit });
-    grooves.push({ z0: q.z, z1: hit.z, minDia: 2 * minR });
+    grooves.push({ z0: q.z, z1: hit.z, minDia: 2 * minR, level: q.r, toEnd: false });
     const after = rest[found];
     if (!same(hit, after.b)) queue.push(part(after, hit, after.b));
     queue.push(...rest.slice(found + 1));
@@ -291,8 +306,6 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): stri
   const sx = fmt(2 * rStop);
   const zc = fmt(faceZ + CLEAR_Z);
   const lines: string[] = [];
-  for (const gr of env.grooves)
-    lines.push(`(내경 홈 Z${fmt(gr.z0)} ~ Z${fmt(gr.z1)} 최대 Ø${fmt(-gr.minDia)} : G71 로는 깎을 수 없어 메워서 지나감)`);
   lines.push(
     `(드릴 Ø${fmt(drill.width)} : G74 로 5mm 씩 쪼아 들어감${through ? ', 관통' : ''})`,
     `${toolCode(drill.no).slice(0, 3)}00 ;`,
@@ -317,7 +330,62 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): stri
     'M05 ;',
   );
   if (!through) lines.splice(lines.length - 2, 0, `(구멍 바닥 가운데 Ø${sx} 안쪽은 드릴 끝 모양이 조금 남을 수 있음)`);
+  lines.push(...grooveBlocks(env.grooves, inner.map(flipR), -1, input.tools.find((t) => t.type === 'igroove'), faceZ, 0));
   return lines;
+}
+
+/**
+ * G71 이 메운 홈을 홈 바이트로 G75 (바닥이 평평한 부분만, 기준점 = 척 쪽 모서리, 날폭은 +Z).
+ * moves 는 홈을 찾을 때 쓴 형상 (내경이면 반경을 뒤집은 것), side = 1 외경 / -1 내경.
+ * 바이트보다 좁은 홈, 홈 옆의 모따기, 척 쪽 끝의 모따기·단은 남기고 주석으로 알린다.
+ */
+function grooveBlocks(grooves: Groove[], moves: DrawingMove[], side: 1 | -1, tool: ToolDef | undefined, faceZ: number, D: number): string[] {
+  const out: string[] = [];
+  const name = side > 0 ? '홈' : '내경 홈';
+  const pts = moves.flatMap(points);
+  for (const g of grooves) {
+    const real = (r: number) => side * r;
+    const where = `Z${fmt(g.z0)} ~ Z${fmt(g.z1)} Ø${fmt(Math.abs(g.minDia))}`;
+    if (g.toEnd) {
+      out.push(`(${name} ${where} : 척 쪽 끝의 모따기·단은 반대로 물려서 2차 가공)`);
+      continue;
+    }
+    if (!tool) {
+      out.push(`(${name} ${where} : 설정에 ${side > 0 ? '홈 바이트' : '내경 홈 바이트'}가 없어 메워서 지나감)`);
+      continue;
+    }
+    // 바닥(가장 깊은 곳)이 평평한 Z 범위
+    const inside = pts.filter((p) => p.z <= g.z0 + EPS && p.z >= g.z1 - EPS);
+    const deep = Math.min(...inside.map((p) => p.r));
+    const flat = inside.filter((p) => p.r < deep + 0.005).map((p) => p.z);
+    const za = Math.max(...flat);
+    const zb = Math.min(...flat);
+    const w = tool.width > 0 ? tool.width : 3;
+    if (za - zb < w - 1e-6) {
+      out.push(`(${name} ${where} : 홈 폭 ${fmt(za - zb)} 이 바이트 폭 ${fmt(w)} 보다 좁아 메워서 지나감)`);
+      continue;
+    }
+    const startX = fmt(2 * real(g.level) + 2 * side);
+    const q = Math.max(100, Math.floor((w * 800) / 100) * 100);
+    const t = toolCode(tool.no);
+    out.push(
+      `(${name} ${where} : ${side > 0 ? '홈 바이트' : '내경 홈 바이트'} 폭 ${fmt(w)} · G75 로 1mm 씩 쪼아 들어감, 기준점 = 척 쪽 모서리)`,
+      ...[
+        ...(za < g.z0 - 0.01 ? [`Z${fmt(g.z0)} ~ Z${fmt(za)}`] : []),
+        ...(zb > g.z1 + 0.01 ? [`Z${fmt(zb)} ~ Z${fmt(g.z1)}`] : []),
+      ].map((r) => `(홈 옆 모따기·경사 ${r} 는 남음)`),
+      `${t.slice(0, 3)}00 ;`,
+      'G97 S500 M03 ;',
+      `G00 X${startX} Z${fmt(faceZ + 5)} ${t} M08 ;`,
+      `Z${fmt(za - w)} ;`,
+      'G75 R0.5 ;',
+      `G75 X${fmt(2 * real(deep))} Z${fmt(zb)} P1000 Q${q} F0.07 ;`,
+      side > 0 ? `G00 X${fmt(D + 4)} ;` : `G00 Z${fmt(faceZ + 5)} ;`,
+      'G28 U0. W0. M09 ;',
+      'M05 ;',
+    );
+  }
+  return out;
 }
 
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
@@ -373,8 +441,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
     `(모범 답안 : 도면 형상에서 자동으로 만든 외경 단면 · G71 황삭 · G70 정삭${innerRaw.length ? ' · 드릴 · 내경 보링' : ''})`,
     '(절삭 조건은 연습용 고정값입니다)',
   ];
-  for (const gr of grooves)
-    code.push(`(홈 Z${fmt(gr.z0)} ~ Z${fmt(gr.z1)} 최소 Ø${fmt(gr.minDia)} : G71 로는 깎을 수 없어 메워서 지나감. 홈 바이트로 따로 연습)`);
+  if (grooves.length) code.push('(홈은 G71 · G70 으로는 메워서 지나가고, 정삭 뒤에 홈 바이트로 따로 깎음)');
   code.push('G28 U0. W0. ;', `G50 S2000 ${toolCode(rough.no).slice(0, 3)}00 ;`, 'G96 S150 M03 ;');
   if (s.faceAllowance > EPS) {
     code.push(`G00 X${faceStart} Z${fmt(faceZ)} ${toolCode(rough.no)} M08 ;`);
@@ -398,6 +465,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
     'G28 U0. W0. M09 ;',
     'M05 ;',
   );
+  code.push(...grooveBlocks(grooves, profile, 1, input.tools.find((t) => t.type === 'groove'), faceZ, D));
   if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input));
 
   const inside = (z0: number, z1: number, what: string) => {
