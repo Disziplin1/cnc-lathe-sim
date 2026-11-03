@@ -241,3 +241,15 @@ describe('DXF 내경(구멍) 찾기', () => {
     sameProfile(r.text.split('(내경)')[0], 'X0. Z0.\nX40.\nZ-30.\n');
   });
 });
+
+describe('DXF 파일 끝 처리', () => {
+  it('EOF 뒤에 남은 찌꺼기(덮어쓰기로 남은 옛 내용)는 무시한다', () => {
+    const src = dxf([...chain(TOP, 100), line(65, 109, 64, 110), line(65, 91, 64, 90), line(65, 91, 65, 109), line(0, 72.5, 0, 127.5)]) + '\r\n302821302821\r\n310\r\n3028213028\r\n  0\r\nENDSEC\r\n';
+    sameProfile(dxfToTarget(src).text, WANT);
+  });
+
+  it('읽을 수 없는 줄은 몇 번째 줄인지 알려 준다', () => {
+    const src = dxf(chain(TOP, 100)).replace('ENTITIES', 'ENTITIES\r\nGARBAGE');
+    expect(() => dxfToTarget(src)).toThrow(/번째 줄을 읽을 수 없습니다/);
+  });
+});

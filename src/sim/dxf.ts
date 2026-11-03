@@ -54,8 +54,14 @@ function readEntities(src: string): { entities: RawEntity[]; layerType: Map<stri
   const pairs: [number, string][] = [];
   for (let i = 0; i + 1 < lines.length; i += 2) {
     const code = parseInt(lines[i].trim(), 10);
-    if (Number.isNaN(code)) throw new Error('DXF 형식이 아닙니다 (ASCII DXF 만 읽을 수 있습니다)');
-    pairs.push([code, lines[i + 1].trim()]);
+    if (Number.isNaN(code)) {
+      const text = lines[i].trim().slice(0, 30);
+      throw new Error(`DXF ${i + 1}번째 줄을 읽을 수 없습니다 ('${text}'). ASCII DXF 로 다시 저장해 주세요`);
+    }
+    const val = lines[i + 1].trim();
+    // AutoCAD 처럼 EOF 에서 멈춘다 (뒤에 남은 찌꺼기는 무시)
+    if (code === 0 && val === 'EOF') break;
+    pairs.push([code, val]);
   }
 
   const entities: RawEntity[] = [];
