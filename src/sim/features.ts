@@ -2,6 +2,7 @@
  * 도면 탭의 나사 · 널링 표시 줄.
  * 외곽선만으로는 나사·널링인지 알 수 없으므로 주석 한 줄로 적는다.
  *   (나사 M20x1.5 Z0. ~ Z-18.)   피치를 안 쓰면 보통나사 피치 (M6 → 1.0)
+ *   (나사 M20x1.5 Z0. ~ Z-15. 내경)   구멍 안쪽 나사 (암나사)
  *   (널링 Z-32. ~ Z-92.)
  */
 export interface ThreadFeature {
@@ -12,6 +13,8 @@ export interface ThreadFeature {
   z0: number;
   /** 척 쪽 Z (작은 값) */
   z1: number;
+  /** 구멍 안쪽 나사 (암나사) */
+  inner: boolean;
   line: number;
 }
 
@@ -33,7 +36,7 @@ export function coarsePitch(dia: number): number | null {
 
 const NUM = '(-?\\d+(?:\\.\\d*)?|-?\\.\\d+)';
 const RANGE = `Z\\s*${NUM}\\s*~\\s*Z\\s*${NUM}`;
-const THREAD_RE = new RegExp(`\\(\\s*나사\\s+M\\s*(\\d+(?:\\.\\d+)?)(?:\\s*[xX×*]\\s*(\\d+(?:\\.\\d+)?))?\\s+${RANGE}`);
+const THREAD_RE = new RegExp(`\\(\\s*나사\\s+M\\s*(\\d+(?:\\.\\d+)?)(?:\\s*[xX×*]\\s*(\\d+(?:\\.\\d+)?))?\\s+${RANGE}(\\s*내경)?`);
 const KNURL_RE = new RegExp(`\\(\\s*널링\\s+${RANGE}`);
 
 export function parseFeatures(text: string): { threads: ThreadFeature[]; knurls: KnurlFeature[]; errors: { line: number; message: string }[] } {
@@ -49,7 +52,7 @@ export function parseFeatures(text: string): { threads: ThreadFeature[]; knurls:
       const pitch = m[2] ? parseFloat(m[2]) : coarsePitch(dia);
       if (!pitch) return void errors.push({ line, message: `M${dia} 의 보통나사 피치를 모릅니다. M${dia}x1.5 처럼 피치를 써 주세요` });
       const [a, b] = [parseFloat(m[3]), parseFloat(m[4])];
-      threads.push({ dia, pitch, z0: Math.max(a, b), z1: Math.min(a, b), line });
+      threads.push({ dia, pitch, z0: Math.max(a, b), z1: Math.min(a, b), inner: !!m[5], line });
     } else if (/\(\s*널링/.test(s)) {
       const m = KNURL_RE.exec(s);
       if (!m) return void errors.push({ line, message: '널링 줄 형식: (널링 Z-32. ~ Z-92.)' });
@@ -68,7 +71,7 @@ const fmt = (v: number) => {
 
 export function threadLine(t: Omit<ThreadFeature, 'line'>): string {
   const spec = coarsePitch(t.dia) === t.pitch ? `M${t.dia}` : `M${t.dia}x${t.pitch}`;
-  return `(나사 ${spec} Z${fmt(t.z0)} ~ Z${fmt(t.z1)})`;
+  return `(나사 ${spec} Z${fmt(t.z0)} ~ Z${fmt(t.z1)}${t.inner ? ' 내경' : ''})`;
 }
 
 export function knurlLine(k: Omit<KnurlFeature, 'line'>): string {

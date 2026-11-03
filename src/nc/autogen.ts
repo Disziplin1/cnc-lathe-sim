@@ -433,20 +433,38 @@ export function generateProgram(input: AutoInput): AutoProgram {
 
   // 나사: G76 (산높이 0.6134P, 첫 절입 ≈ 산높이의 38%, 정삭 2회)
   const threadTool = input.tools.find((t) => t.type === 'thread');
+  const innerTool = input.tools.find((t) => t.type === 'ithread');
   for (const t of feat.threads) {
     inside(t.z0, t.z1, '나사');
     const spec = coarsePitch(t.dia) === t.pitch ? `M${t.dia}` : `M${t.dia}x${t.pitch}`;
-    if (!threadTool) {
-      code.push(`(나사 ${spec} : 설정에 나사 바이트가 없어 생략)`);
+    const tool = t.inner ? innerTool : threadTool;
+    if (!tool) {
+      code.push(`(나사 ${spec}${t.inner ? ' 내경' : ''} : 설정에 ${t.inner ? '내경 나사 바이트' : '나사 바이트'}가 없어 생략)`);
       continue;
     }
     const h = Math.round(t.pitch * 0.6134 * 1000) / 1000;
     const q = Math.max(100, Math.round((h * 0.38 * 1000) / 10) * 10);
+    if (t.inner) {
+      // 암나사: 구멍(안지름) 안쪽에서 시작해 바깥(호칭 지름)까지 깎아 나간다 → G76 X 는 호칭 지름
+      if (!innerRaw.length) throw new Error(`내경 나사 ${spec} 가 있는데 도면에 (내경) 구멍 윤곽이 없습니다`);
+      const minorDia = t.dia - 1.0825 * t.pitch;
+      code.push(
+        `(G76 내경 나사 ${spec} : 구멍은 안지름 Ø${fmt(minorDia)} 로 보링, 산높이 ${fmt(h)} / 첫 절입 ${fmt(q / 1000)})`,
+        `${toolCode(tool.no).slice(0, 3)}00 ;`,
+        'G97 S500 M03 ;',
+        `G00 X${fmt(Math.floor((minorDia - 1) * 10) / 10)} Z${fmt(t.z0 + 5)} ${toolCode(tool.no)} M08 ;`,
+        'G76 P020060 Q50 R0.05 ;',
+        `G76 X${fmt(t.dia)} Z${fmt(t.z1)} P${Math.round(h * 1000)} Q${q} F${fmt(t.pitch)} ;`,
+        'G28 U0. W0. M09 ;',
+        'M05 ;',
+      );
+      continue;
+    }
     code.push(
       `(G76 나사 ${spec} : 산높이 ${fmt(h)} / 첫 절입 ${fmt(q / 1000)} / 골지름 X${fmt(t.dia - 2 * h)})`,
-      `${toolCode(threadTool.no).slice(0, 3)}00 ;`,
+      `${toolCode(tool.no).slice(0, 3)}00 ;`,
       'G97 S600 M03 ;',
-      `G00 X${fmt(t.dia + 4)} Z${fmt(t.z0 + 5)} ${toolCode(threadTool.no)} M08 ;`,
+      `G00 X${fmt(t.dia + 4)} Z${fmt(t.z0 + 5)} ${toolCode(tool.no)} M08 ;`,
       'G76 P020060 Q50 R0.05 ;',
       `G76 X${fmt(t.dia - 2 * h)} Z${fmt(t.z1)} P${Math.round(h * 1000)} Q${q} F${fmt(t.pitch)} ;`,
       'G28 U0. W0. M09 ;',

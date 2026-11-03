@@ -137,6 +137,16 @@ function buildTool(def: ToolDef, shape: Vec[], color: string): THREE.Group {
       g.add(box(zMin - 2, zMax + 18, 28, 100, -22, 3, holderMat));
       break;
     }
+    case 'ithread': {
+      // 날 + 구멍 안으로 들어가는 가는 바 (축 = 날 끝보다 4 아래)
+      g.add(plate(shape, -1.5, 1.5, tipMat));
+      const len = 160;
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, len, 24), holderMat);
+      bar.rotation.z = Math.PI / 2;
+      bar.position.set(zMax + len / 2, -4, -1.5);
+      g.add(bar);
+      break;
+    }
     case 'boring': {
       // 인서트 + 구멍 안으로 들어가는 둥근 보링바 (축 = 공구 끝보다 6 아래)
       g.add(plate(shape, -2.4, 2.4, tipMat));

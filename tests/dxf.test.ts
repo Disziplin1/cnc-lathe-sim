@@ -253,3 +253,18 @@ describe('DXF 파일 끝 처리', () => {
     expect(() => dxfToTarget(src)).toThrow(/번째 줄을 읽을 수 없습니다/);
   });
 });
+
+describe('DXF 암나사 찾기', () => {
+  it('구멍 지름이 안지름이고 M20x1.5 글자가 있으면 내경 나사', () => {
+    const ax = 50;
+    const half = (s: number): Ent[] => [
+      ...chain([[30, ax + s * 9.188], [30, ax + s * 20], [0, ax + s * 20], [0, ax + s * 9.188], [30, ax + s * 9.188]] as [number, number][]),
+      // 바깥지름 가는 선 (나사 길이 15)
+      line(30, ax + s * 10, 15, ax + s * 10, 'THIN'),
+    ];
+    const ents: Ent[] = [...half(1), ...half(-1), line(-5, ax, 40, ax, 'CENTER'), ['DIMENSION', [[8, 'DIM'], [1, 'M20x1.5'], [11, 20], [21, ax + 5]]]];
+    const r = dxfToTarget(dxf(ents, [['CENTER', 'CENTER']]));
+    expect(r.text).toContain('(내경)');
+    expect(r.text).toContain('(나사 M20x1.5 Z0. ~ Z-15. 내경)');
+  });
+});

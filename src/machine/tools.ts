@@ -1,6 +1,6 @@
 import type { Vec } from '../nc/types';
 
-export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl';
+export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl' | 'ithread';
 
 export interface ToolDef {
   no: number;
@@ -30,6 +30,7 @@ export const TOOL_LABEL: Record<ToolType, string> = {
   drill: '드릴',
   boring: '보링바 (내경, 55°)',
   knurl: '널링 (롤러)',
+  ithread: '내경 나사 바이트 (60°)',
 };
 
 export const TOOL_COLOR: Record<ToolType, string> = {
@@ -40,6 +41,7 @@ export const TOOL_COLOR: Record<ToolType, string> = {
   drill: '#ff7aa8',
   boring: '#5ee6e6',
   knurl: '#e8c547',
+  ithread: '#a98bff',
 };
 
 /** 폭/직경 칸을 쓰는 공구 */
@@ -56,6 +58,7 @@ export function defaultTools(): ToolDef[] {
     { no: 3, type: 'finish', width: 3, noseR: 0.4 },
     { no: 5, type: 'groove', width: 3, noseR: 0 },
     { no: 7, type: 'thread', width: 3, noseR: 0 },
+    { no: 8, type: 'ithread', width: 3, noseR: 0 },
     { no: 9, type: 'boring', width: 3, noseR: 0.4 },
     { no: 11, type: 'drill', width: 20, noseR: 0 },
     { no: 12, type: 'knurl', width: 8, noseR: 0 },
@@ -70,12 +73,18 @@ export function defaultOffsets(): ToolOffset[] {
   return list;
 }
 
-/** 저장된 예전 설정에 빠진 값 채우기 (널링 공구가 생기기 전 설정이면 빈 12번에 넣어 준다) */
+/** 나중에 생긴 공구 종류: 예전 설정에 없으면 이 번호가 비어 있을 때 넣어 준다 */
+const ADDED_LATER: ToolDef[] = [
+  { no: 12, type: 'knurl', width: 8, noseR: 0 },
+  { no: 8, type: 'ithread', width: 3, noseR: 0 },
+];
+
+/** 저장된 예전 설정에 빠진 값 채우기 */
 export function normalizeTools(tools: Partial<ToolDef>[]): ToolDef[] {
   const out: ToolDef[] = tools.map((t) => ({ no: t.no ?? 1, type: t.type ?? 'rough', width: t.width ?? 3, noseR: t.noseR ?? 0 }));
-  if (!out.some((t) => t.type === 'knurl') && !out.some((t) => t.no === 12) && out.length < MAX_TOOLS)
-    out.push({ no: 12, type: 'knurl', width: 8, noseR: 0 });
-  return out;
+  for (const add of ADDED_LATER)
+    if (!out.some((t) => t.type === add.type) && !out.some((t) => t.no === add.no) && out.length < MAX_TOOLS) out.push({ ...add });
+  return out.sort((a, b) => a.no - b.no);
 }
 
 /**
@@ -176,6 +185,18 @@ export function toolShape(t: ToolDef): Vec[] {
         { z: half, r: 12 },
         { z: -half, r: 12 },
         { z: -half, r: h },
+      ];
+    }
+    case 'ithread': {
+      // 외경 나사 바이트를 위아래로 뒤집은 모양: 날 끝이 위(구멍 벽 쪽), 몸체는 아래로 짧게
+      const h = 2;
+      const half = h * Math.tan(30 * deg);
+      return [
+        { z: 0, r: 0 },
+        { z: -half, r: -h },
+        { z: -half, r: -6 },
+        { z: half, r: -6 },
+        { z: half, r: -h },
       ];
     }
     case 'knurl': {

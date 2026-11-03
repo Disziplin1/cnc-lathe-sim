@@ -172,3 +172,20 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(sim.advanceTo(p.duration)?.code).toBe('SIM04');
   });
 });
+
+describe('모범 답안: 내경 나사 (암나사)', () => {
+  it('(나사 M20x1.5 ... 내경) → 보링 후 내경 나사 바이트로 G76', () => {
+    const tools = cfg.tools.map((t) => (t.type === 'drill' ? { ...t, width: 16 } : t));
+    const drawing = ['X18.376 Z0.', 'X40.', 'Z-30.', '(내경)', 'X18.376 Z0.', 'Z-30.', '(나사 M20x1.5 Z0. ~ Z-15. 내경)'].join('\n');
+    const gen = generateProgram({ drawing, stock, tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('T0800 ;');
+    expect(gen.code).toContain('G00 X17.3 Z5. T0808 M08 ;');
+    expect(gen.code).toContain('G76 X20. Z-15. P920 Q350 F1.5 ;');
+    const p = compile(gen.code, { ...cfg, tools });
+    expect(p.alarm).toBeNull();
+    const th = p.segments.filter((s) => s.kind === 'thread');
+    expect(Math.max(...th.map((s) => s.pts[1].r))).toBeCloseTo(10, 3);
+    const sim = new CutSim(p, stock, tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+  });
+});

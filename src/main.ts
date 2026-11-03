@@ -188,6 +188,8 @@ let targetError: Alarm | null = null;
 let cmpResult: CompareResult | null = null;
 let lastCmpVersion = -1;
 let lastCmpTime = 0;
+/** 지난번 도면 비교 계산에 걸린 시간 (ms) */
+let lastCmpCost = 0;
 let dwgTimer = 0;
 const dwgEditor = new NcEditor(
   $('editor-dwg'),
@@ -462,11 +464,14 @@ function updateCompare(now: number, running: boolean) {
     badge.className = 'compare';
     return;
   }
-  if (player.sim.version !== lastCmpVersion && (!running || now - lastCmpTime > 400)) {
+  // 남은 살(주황) 표시가 공구를 늦게 따라오지 않게 바뀔 때마다 다시 계산. 오래 걸리면 그만큼만 간격을 둔다
+  if (player.sim.version !== lastCmpVersion && (!running || now - lastCmpTime >= lastCmpCost * 3)) {
     lastCmpVersion = player.sim.version;
     lastCmpTime = now;
+    const t0 = performance.now();
     const noseMax = Math.max(0, ...settings.tools.map((t) => t.noseR));
     cmpResult = compareStock(player.sim.stock, target, threadRanges(prog), noseMax * 1.6 + 0.05);
+    lastCmpCost = performance.now() - t0;
   }
   if (!cmpResult) return;
   const tol = 0.02;
@@ -540,6 +545,8 @@ function currentOffset(): Vec {
 
 let last3dVersion = -1;
 let last3dTime = 0;
+/** 지난번 3D 소재 메시를 만드는 데 걸린 시간 (ms) */
+let last3dCost = 0;
 let lastState = '';
 
 // ---- 편집 중 커서 미리보기: 커서가 있는 블록까지 실행한 모습 ----
@@ -646,12 +653,14 @@ function updateUi(now: number, dt: number) {
   });
   updateCompare(now, running);
 
-  // 3D (소재 메시는 너무 자주 만들지 않는다)
+  // 3D: 소재 메시는 바뀔 때마다 새로 만든다. 만드는 데 오래 걸리면(나사 등 복잡한 모양) 그만큼만 간격을 둔다
   if (view3d.visible) {
-    if (player.sim.version !== last3dVersion && (now - last3dTime > 120 || !running)) {
+    if (player.sim.version !== last3dVersion && (now - last3dTime >= last3dCost * 3 || !running)) {
       last3dVersion = player.sim.version;
       last3dTime = now;
+      const t0 = performance.now();
       view3d.setStock(player.sim.stock, player.sim.knurled);
+      last3dCost = performance.now() - t0;
     }
     const def = settings.tools.find((t) => t.no === seg?.tool);
     view3d.setTool(def ?? null, shape, p, def ? TOOL_COLOR[def.type] : '#cccccc');
@@ -818,7 +827,7 @@ $('btn-settings').onclick = () => {
   for (let n = 1; n <= MAX_TOOLS; n++) {
     const t = settings.tools.find((x) => x.no === n);
     const tr = document.createElement('tr');
-    const opts = (['', 'rough', 'finish', 'groove', 'thread', 'boring', 'drill', 'knurl'] as const)
+    const opts = (['', 'rough', 'finish', 'groove', 'thread', 'ithread', 'boring', 'drill', 'knurl'] as const)
       .map((k) => `<option value="${k}" ${(t?.type ?? '') === k ? 'selected' : ''}>${k ? TOOL_LABEL[k] : '— 없음 —'}</option>`)
       .join('');
     tr.innerHTML = `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td><td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td><td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>`;

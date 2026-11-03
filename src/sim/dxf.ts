@@ -537,6 +537,12 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
       const [a, b] = [nodes[e.from].x - faceX, nodes[e.to].x - faceX];
       return { z0: Math.max(a, b), z1: Math.min(a, b), r: nodes[e.from].y - axis };
     });
+  const innerZLines = innerPath
+    .filter((e) => e.prim.kind === 'line' && Math.abs(nodes[e.from].y - nodes[e.to].y) < EPS && nodes[e.from].y > axis + EPS)
+    .map((e) => {
+      const [a, b] = [nodes[e.from].x - faceX, nodes[e.to].x - faceX];
+      return { z0: Math.max(a, b), z1: Math.min(a, b), r: nodes[e.from].y - axis };
+    });
   const gapTo = (z: number, l: { z0: number; z1: number }) => (z > l.z0 ? z - l.z0 : z < l.z1 ? l.z1 - z : 0);
   const notes: string[] = [];
   const seen = new Set<string>();
@@ -547,27 +553,39 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
     const dia = parseFloat(m[1]);
     const pitch = m[2] ? parseFloat(m[2]) : coarsePitch(dia);
     if (!pitch) continue;
-    const cands = zLines.filter((l) => Math.abs(2 * l.r - dia) <= Math.max(0.6, dia * 0.06));
+    // 수나사: 외경이 호칭 지름 / 암나사: 구멍(내경)이 안지름(호칭 - 1.0825P)
+    let inner = false;
+    let cands = zLines.filter((l) => Math.abs(2 * l.r - dia) <= Math.max(0.6, dia * 0.06));
+    if (!cands.length) {
+      const minorDia = dia - 1.0825 * pitch;
+      cands = innerZLines.filter((l) => Math.abs(2 * l.r - minorDia) <= Math.max(0.6, dia * 0.08));
+      inner = true;
+    }
     if (!cands.length) continue;
     const z = toZ(t.p);
     const seg = cands.reduce((best, l) => (gapTo(z, l) < gapTo(z, best) ? l : best));
-    // 나사 길이: 구간 안의 골지름 선(가는 선)이 있으면 그 길이, 없으면 구간 전체
-    const rMinor = dia / 2 - 0.6134 * pitch;
+    // 나사 길이: 구간 안의 가는 선(수나사는 골지름, 암나사는 바깥지름)이 있으면 그 길이, 없으면 구간 전체
+    const rThin = inner ? dia / 2 : dia / 2 - 0.6134 * pitch;
     let z0 = seg.z0;
     let z1 = seg.z1;
-    const minor = parsed.allLines
-      .filter((l) => Math.abs(l.a.y - l.b.y) < EPS && Math.abs(toR(l.a) - rMinor) <= Math.max(0.5 * pitch, 0.08 * dia) && toR(l.a) < seg.r - 0.05)
+    const thin = parsed.allLines
+      .filter(
+        (l) =>
+          Math.abs(l.a.y - l.b.y) < EPS &&
+          Math.abs(toR(l.a) - rThin) <= Math.max(0.5 * pitch, 0.08 * dia) &&
+          (inner ? toR(l.a) > seg.r + 0.05 : toR(l.a) < seg.r - 0.05),
+      )
       .map((l) => ({ hi: Math.min(seg.z0, Math.max(toZ(l.a), toZ(l.b))), lo: Math.max(seg.z1, Math.min(toZ(l.a), toZ(l.b))) }))
       .filter((l) => l.hi - l.lo > EPS);
-    if (minor.length) {
-      const best = minor.reduce((x, y) => (y.hi - y.lo > x.hi - x.lo ? y : x));
-      // 나사 끝 모따기 때문에 골지름 선이 끝면보다 조금 짧으면 끝면까지
+    if (thin.length) {
+      const best = thin.reduce((x, y) => (y.hi - y.lo > x.hi - x.lo ? y : x));
+      // 나사 끝 모따기 때문에 가는 선이 구간 끝보다 조금 짧으면 구간 끝까지
       z0 = seg.z0 - best.hi < 2 * pitch ? seg.z0 : best.hi;
       z1 = best.lo;
     }
     // 끝면 모따기 안쪽에서 시작하면 끝면(Z0)부터
     if (z0 < 0 && z0 > -2 * pitch) z0 = 0;
-    const line = threadLine({ dia, pitch, z0, z1 });
+    const line = threadLine({ dia, pitch, z0, z1, inner });
     if (!seen.has(line)) {
       seen.add(line);
       notes.push(line);
