@@ -264,9 +264,11 @@ export class View2D {
       c.lineWidth = 1.5;
       c.setLineDash([6, 4]);
       for (const sgn of [1, -1]) {
-        c.beginPath();
-        target.profile.forEach((p, i) => (i === 0 ? c.moveTo(X(p.z), Y(sgn * p.r)) : c.lineTo(X(p.z), Y(sgn * p.r))));
-        c.stroke();
+        for (const line of target.inner ? [target.profile, target.inner] : [target.profile]) {
+          c.beginPath();
+          line.forEach((p, i) => (i === 0 ? c.moveTo(X(p.z), Y(sgn * p.r)) : c.lineTo(X(p.z), Y(sgn * p.r))));
+          c.stroke();
+        }
       }
       c.setLineDash([]);
       if (result?.excessAt && result.maxExcess > 0.02) this.marker(X(result.excessAt.z), Y(result.excessAt.r), '#ff9f1a');

@@ -1,12 +1,14 @@
 import { lex, type Word } from '../nc/lexer';
 import { arcPoints } from '../nc/interpreter';
 import type { Alarm, Program, Vec } from '../nc/types';
-import { areaOf, difference, fromPath, intersection, rect, toPath, type Path, type Paths } from './geometry';
+import { areaOf, difference, fromPath, intersection, rect, toPath, type Paths } from './geometry';
 
-/** 도면(목표 형상): 끝면 쪽에서 척 쪽으로 가는 외곽선 */
+/** 도면(목표 형상): 끝면 쪽에서 척 쪽으로 가는 외곽선 (+ 구멍이 있으면 내경 윤곽) */
 export interface Target {
   profile: Vec[];
-  region: Path;
+  /** 내경: 끝면의 구멍 가장자리에서 안쪽으로 (구멍 바닥 가운데 또는 척 쪽 끝까지) */
+  inner: Vec[] | null;
+  region: Paths;
   zMin: number;
   zMax: number;
   /** 오목한 날카로운 모서리 (노즈 반경 때문에 반드시 살이 남는 곳) */
@@ -94,12 +96,50 @@ export function movePoints(moves: DrawingMove[]): Vec[] {
   return pts;
 }
 
+/** 내경 윤곽 시작 줄: "(내경)" */
+const INNER_MARK = /^\s*\(\s*내경/;
+
+/**
+ * 도면 텍스트를 외경 / 내경 부분으로 나눈다. "(내경)" 줄 다음이 내경.
+ * 줄 번호가 그대로 맞도록 다른 쪽 줄은 빈 줄로 남긴다.
+ */
+export function splitDrawing(text: string): { outer: string; inner: string | null } {
+  const lines = text.split(/\r?\n/);
+  const at = lines.findIndex((l) => INNER_MARK.test(l));
+  if (at < 0) return { outer: text, inner: null };
+  return {
+    outer: lines.map((l, i) => (i < at ? l : '')).join('\n'),
+    inner: lines.map((l, i) => (i > at ? l : '')).join('\n'),
+  };
+}
+
+/** 날카롭게 꺾이는 모서리 (sign > 0: 왼쪽으로 꺾임, < 0: 오른쪽) */
+function corners(line: Vec[], side: number): Vec[] {
+  const out: Vec[] = [];
+  for (let i = 1; i < line.length - 1; i++) {
+    const [a, b, c] = [line[i - 1], line[i], line[i + 1]];
+    const d1 = { z: b.z - a.z, r: b.r - a.r };
+    const d2 = { z: c.z - b.z, r: c.r - b.r };
+    const s = (d1.z * d2.r - d1.r * d2.z) / (Math.hypot(d1.z, d1.r) * Math.hypot(d2.z, d2.r));
+    if (side * s > Math.sin((20 * Math.PI) / 180)) out.push(b);
+  }
+  return out;
+}
+
 /** 도면 형상 해석 → 비교용 목표 형상 */
 export function parseTarget(text: string): { target: Target | null; error: Alarm | null } {
-  const { moves, error } = drawingMoves(text);
+  const parts = splitDrawing(text);
+  const { moves, error } = drawingMoves(parts.outer);
   if (error) return { target: null, error };
   const pts = movePoints(moves);
   if (pts.length < 2) return { target: null, error: null };
+  let inner: Vec[] | null = null;
+  if (parts.inner !== null) {
+    const r = drawingMoves(parts.inner);
+    if (r.error) return { target: null, error: r.error };
+    const ip = movePoints(r.moves);
+    if (ip.length >= 2) inner = ip[0].z >= ip[ip.length - 1].z ? ip : [...ip].reverse();
+  }
 
   // 끝면(+Z) → 척(-Z) 방향으로 맞춘다
   const profile = pts[0].z >= pts[pts.length - 1].z ? pts : [...pts].reverse();
@@ -110,22 +150,24 @@ export function parseTarget(text: string): { target: Target | null; error: Alarm
   poly.push(...profile);
   if (last.r > 1e-6) poly.push({ z: last.z, r: 0 });
 
-  const concave: Vec[] = [];
-  for (let i = 1; i < profile.length - 1; i++) {
-    const a = profile[i - 1];
-    const b = profile[i];
-    const c = profile[i + 1];
-    const d1 = { z: b.z - a.z, r: b.r - a.r };
-    const d2 = { z: c.z - b.z, r: c.r - b.r };
-    const s = (d1.z * d2.r - d1.r * d2.z) / (Math.hypot(d1.z, d1.r) * Math.hypot(d2.z, d2.r));
-    if (s < -Math.sin((20 * Math.PI) / 180)) concave.push(b);
-  }
+  // 외경은 오른쪽으로 꺾이는 곳, 내경은 왼쪽으로 꺾이는 곳에 노즈 반경만큼 살이 남는다
+  const concave = corners(profile, -1);
   // 도면이 끝나는 곳(척 쪽)은 소재가 계속 이어지므로 오목 모서리와 같다
   concave.push(last);
+  let region: Paths = [toPath(poly)];
+  if (inner) {
+    // 구멍: 내경 윤곽 + 축으로 닫은 영역을 뺀다
+    const hole: Vec[] = [{ z: inner[0].z + 1, r: 0 }, { z: inner[0].z + 1, r: inner[0].r }, ...inner];
+    const e = inner[inner.length - 1];
+    if (e.r > 1e-6) hole.push({ z: e.z, r: 0 });
+    region = difference(region, [toPath(hole)]);
+    concave.push(...corners(inner, 1), e);
+  }
   return {
     target: {
       profile,
-      region: toPath(poly),
+      inner,
+      region,
       zMin: Math.min(...profile.map((p) => p.z)),
       zMax: Math.max(...profile.map((p) => p.z)),
       concave,
@@ -174,9 +216,9 @@ export function compareStock(stock: Paths, t: Target, excluded: [number, number]
   let windowP: Paths = [rect(t.zMin, t.zMax + 100, -1, 1000)];
   for (const [a, b] of excluded) windowP = difference(windowP, [rect(a, b, -2, 1001)]);
   const stockW = intersection(stock, windowP);
-  const regionW = intersection([t.region], windowP);
+  const regionW = intersection(t.region, windowP);
   const keep = (ps: Paths) => ps.filter((p) => areaOf(p) > 1e-4);
-  const excess = keep(difference(stockW, [t.region]));
+  const excess = keep(difference(stockW, t.region));
   const over = keep(difference(regionW, stock));
 
   const measure = (ps: Paths, skipCorners: boolean) => {
@@ -185,7 +227,7 @@ export function compareStock(stock: Paths, t: Target, excluded: [number, number]
     for (const p of ps)
       for (const v of fromPath(p)) {
         if (skipCorners && t.concave.some((c) => dist(c, v) <= cornerTol)) continue;
-        const d = distToPolyline(v, t.profile);
+        const d = Math.min(distToPolyline(v, t.profile), t.inner ? distToPolyline(v, t.inner) : Infinity);
         if (d > max) {
           max = d;
           at = v;

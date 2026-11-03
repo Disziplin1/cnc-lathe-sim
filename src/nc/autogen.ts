@@ -1,7 +1,7 @@
 import { arcPoints } from './interpreter';
 import type { Vec } from './types';
 import type { ToolDef, ToolOffset } from '../machine/tools';
-import { drawingMoves, type DrawingMove } from '../sim/compare';
+import { drawingMoves, splitDrawing, type DrawingMove } from '../sim/compare';
 import { protrusionOf, type StockConfig } from '../sim/simulator';
 import { coarsePitch, parseFeatures } from '../sim/features';
 
@@ -15,6 +15,8 @@ export interface AutoProgram {
   code: string;
   /** 건너뛴 홈 (Z 큰 쪽 → 작은 쪽, 가장 깊은 직경) */
   grooves: { z0: number; z1: number; minDia: number }[];
+  /** 내경(드릴 · 보링)도 넣었는지 */
+  bore: boolean;
 }
 
 export interface AutoInput {
@@ -131,19 +133,170 @@ function radiusAt(moves: DrawingMove[], z: number): number {
   return best;
 }
 
+/**
+ * G71 / G70 의 P~Q 블록. 같은 G 와 같은 좌표는 생략 (모달).
+ * 첫 이동이 직선이면 그 직선을 Z2 까지 늘여서 들어가고(모따기를 끊김 없이), 마지막에 반경 endR 로 빠진다.
+ */
+function contourBody(out: DrawingMove[], faceZ: number, nP: number, nQ: number, endR: number): string[] {
+  const body: string[] = [];
+  let g = '';
+  // r -1: 첫 블록(N)에는 X 를 반드시 쓴다
+  let at: Vec = { z: CLEAR_Z + faceZ, r: -1 };
+  const emit = (code: string, p: Vec, extra = '') => {
+    const words: string[] = [];
+    if (code !== g || code === 'G02' || code === 'G03') words.push(code);
+    if (Math.abs(p.r - at.r) > EPS) words.push(`X${fmt(2 * p.r)}`);
+    if (Math.abs(p.z - at.z) > EPS) words.push(`Z${fmt(p.z)}`);
+    if (extra) words.push(extra);
+    g = code;
+    at = p;
+    return words.join(' ');
+  };
+
+  const first = out[0];
+  let rest = out;
+  if (first.kind === 'line' && first.b.z < first.a.z - EPS) {
+    const slope = (first.b.r - first.a.r) / (first.b.z - first.a.z);
+    const r = first.a.r + (CLEAR_Z + faceZ - first.a.z) * slope;
+    rest = r >= 0 ? out.slice(1) : out;
+    body.push(`N${nP} ${emit('G00', { ...at, r: r >= 0 ? r : first.a.r })} ;`);
+    body.push(`${emit('G01', r >= 0 ? first.b : first.a, 'F0.1')} ;`);
+  } else {
+    body.push(`N${nP} ${emit('G00', { ...at, r: first.a.r })} ;`);
+    body.push(`${emit('G01', first.a, 'F0.1')} ;`);
+  }
+  for (const m of rest) {
+    if (m.kind === 'line') {
+      const line = emit('G01', m.b);
+      if (line) body.push(`${line} ;`);
+    } else {
+      const R = Math.hypot(m.a.z - m.c.z, m.a.r - m.c.r);
+      // 180° 넘는 원호는 R 을 음수로
+      const a0 = Math.atan2(m.a.r - m.c.r, m.a.z - m.c.z);
+      const a1 = Math.atan2(m.b.r - m.c.r, m.b.z - m.c.z);
+      let sweep = m.ccw ? a1 - a0 : a0 - a1;
+      while (sweep <= 1e-9) sweep += Math.PI * 2;
+      body.push(`${emit(m.ccw ? 'G03' : 'G02', m.b, `R${fmt(sweep > Math.PI ? -R : R)}`)} ;`);
+    }
+  }
+  const last = emit('G01', { ...at, r: endR });
+  body.push(`N${nQ} ${last || `G01 X${fmt(2 * endR)}`} ;`);
+  return body;
+}
+
+/** 반경 부호를 뒤집은 이동 (내경을 외경과 같은 계산으로 다루기 위해) */
+function flipR(m: DrawingMove): DrawingMove {
+  const f = (p: Vec): Vec => ({ z: p.z, r: -p.r });
+  return m.kind === 'arc' ? { kind: 'arc', a: f(m.a), b: f(m.b), c: f(m.c), ccw: !m.ccw } : { kind: 'line', a: f(m.a), b: f(m.b) };
+}
+
+/** 끝면 → 안쪽(척) 방향으로 맞춘다 */
+function faceFirst(moves: DrawingMove[]): DrawingMove[] {
+  if (moves[0].a.z >= moves[moves.length - 1].b.z) return moves;
+  return [...moves].reverse().map((m) => (m.kind === 'arc' ? { ...m, a: m.b, b: m.a, ccw: !m.ccw } : { kind: 'line', a: m.b, b: m.a }));
+}
+
+/**
+ * 내경: 드릴(G74) → 보링 황삭(G71, 정삭 여유 U 마이너스) → 보링 정삭(G70 + G41).
+ * 보링은 드릴 구멍보다 0.5mm 안쪽(반경)에서 시작하고, 그보다 작은 곳(막힌 구멍 바닥 가운데의 드릴 끝 모양)은 남는다.
+ */
+function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): string[] {
+  const drill = input.tools.find((t) => t.type === 'drill');
+  const bar = input.tools.find((t) => t.type === 'boring');
+  if (!drill) throw new Error('도면에 구멍(내경)이 있는데 설정에 드릴이 없습니다');
+  if (!bar) throw new Error('도면에 구멍(내경)이 있는데 설정에 보링바가 없습니다');
+
+  // 구멍 쪽으로 파인 곳(내경 홈)은 외경 홈과 같은 방법으로 메운다 (반경 부호를 뒤집어 계산)
+  const env = envelope(inner.map(flipR));
+  const out = env.out.map(flipR);
+  const pts = out.flatMap(points);
+  const wall = Math.min(...pts.filter((p) => p.r > EPS).map((p) => p.r));
+  const dr = drill.width / 2;
+  if (!(wall > 0)) throw new Error('내경 윤곽에 구멍 지름이 없습니다');
+  if (dr > wall - 0.3) {
+    const fit = Math.floor(2 * wall - 2);
+    throw new Error(`드릴 Ø${fmt(drill.width)} 이 구멍 Ø${fmt(2 * wall)} 보다 너무 큽니다. 설정에서 ${toolCode(drill.no).slice(0, 3)} 드릴 지름을 Ø${fit} 이하로 바꿔 주세요`);
+  }
+  const rStop = dr - 0.5;
+
+  // 보링 형상: 반경이 rStop 까지 내려가는 곳에서 자른다
+  const cut: DrawingMove[] = [];
+  let through = true;
+  for (const m of out) {
+    const mp = points(m);
+    if (mp[mp.length - 1].r > rStop + EPS) {
+      cut.push(m);
+      continue;
+    }
+    const hit = pointAtLevel(m, rStop, mp[0]);
+    if (Math.abs(hit.z - m.a.z) > EPS || Math.abs(hit.r - m.a.r) > EPS) cut.push(part(m, m.a, hit));
+    through = false;
+    break;
+  }
+  const endZ = cut[cut.length - 1].b.z;
+  // 드릴 깊이: 관통이면 끝까지 뚫고 나가게, 막힌 구멍이면 드릴 몸통 지름이 들어갈 수 있는 곳까지 끝을 맞춘다
+  const tipLen = dr / Math.tan((59 * Math.PI) / 180);
+  let drillZ = Math.floor((endZ - tipLen - 1) * 10) / 10;
+  if (!through) {
+    drillZ = endZ;
+    for (const m of out) {
+      const mp = points(m);
+      if (mp[mp.length - 1].r >= dr - EPS) continue;
+      drillZ = pointAtLevel(m, dr, mp[0]).z;
+      break;
+    }
+  }
+  const off = input.offsets[bar.no - 1];
+  const sx = fmt(2 * rStop);
+  const zc = fmt(faceZ + CLEAR_Z);
+  const lines: string[] = [];
+  for (const gr of env.grooves)
+    lines.push(`(내경 홈 Z${fmt(gr.z0)} ~ Z${fmt(gr.z1)} 최대 Ø${fmt(-gr.minDia)} : G71 로는 깎을 수 없어 메워서 지나감)`);
+  lines.push(
+    `(드릴 Ø${fmt(drill.width)} : G74 로 5mm 씩 쪼아 들어감${through ? ', 관통' : ''})`,
+    `${toolCode(drill.no).slice(0, 3)}00 ;`,
+    'G97 S500 M03 ;',
+    `G00 X0. Z${fmt(faceZ + 5)} ${toolCode(drill.no)} M08 ;`,
+    'G74 R1. ;',
+    `G74 Z${fmt(drillZ)} Q5000 F0.1 ;`,
+    'G28 U0. W0. M09 ;',
+    'M05 ;',
+    '(내경 황삭 G71 : 내경이므로 정삭 여유 U 가 마이너스)',
+    `G50 S2000 ${toolCode(bar.no).slice(0, 3)}00 ;`,
+    'G96 S120 M03 ;',
+    `G00 X${sx} Z${zc} ${toolCode(bar.no)} M08 ;`,
+    'G71 U1. R0.5 ;',
+    'G71 P30 Q40 U-0.4 W0.1 F0.2 ;',
+    ...contourBody(cut, faceZ, 30, 40, rStop),
+    `(내경 정삭 : 구멍 안쪽은 G41${off && off.R > 0 ? '' : ` - 공구 보정 ${String(bar.no).padStart(2, '0')}번에 R 과 T(2) 를 넣어야 보정됩니다`})`,
+    `G41 G00 X${sx} Z${zc} ;`,
+    'G70 P30 Q40 ;',
+    `G40 G00 Z${fmt(faceZ + 5)} ;`,
+    'G28 U0. W0. M09 ;',
+    'M05 ;',
+  );
+  if (!through) lines.splice(lines.length - 2, 0, `(구멍 바닥 가운데 Ø${sx} 안쪽은 드릴 끝 모양이 조금 남을 수 있음)`);
+  return lines;
+}
+
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
 
 export function generateProgram(input: AutoInput): AutoProgram {
-  const { moves: raw, error } = drawingMoves(input.drawing);
+  const parts = splitDrawing(input.drawing);
+  const { moves: raw, error } = drawingMoves(parts.outer);
   if (error) throw new Error(`도면 ${error.line + 1}행: ${error.message}`);
   if (!raw.length) throw new Error('도면 탭에 목표 형상이 없습니다');
   const feat = parseFeatures(input.drawing);
   if (feat.errors.length) throw new Error(`도면 ${feat.errors[0].line + 1}행: ${feat.errors[0].message}`);
+  let innerRaw: DrawingMove[] = [];
+  if (parts.inner !== null) {
+    const r = drawingMoves(parts.inner);
+    if (r.error) throw new Error(`도면 ${r.error.line + 1}행: ${r.error.message}`);
+    innerRaw = r.moves;
+  }
 
   // 끝면 → 척 방향으로 맞춘다
-  let moves = raw;
-  if (raw[0].a.z < raw[raw.length - 1].b.z)
-    moves = [...raw].reverse().map((m) => (m.kind === 'arc' ? { ...m, a: m.b, b: m.a, ccw: !m.ccw } : { kind: 'line', a: m.b, b: m.a }));
+  const moves = faceFirst(raw);
 
   // 앞쪽 끝면(Z 가 그대로인 X 방향 직선)은 단면 가공으로 깎는다
   const faceZ = moves[0].a.z;
@@ -168,54 +321,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
   const finish = input.tools.find((t) => t.type === 'finish') ?? rough;
   const finR = input.offsets[finish.no - 1]?.R ?? 0;
 
-  // 정삭 형상 (P~Q). 같은 G 와 같은 좌표는 생략 (모달)
-  const body: string[] = [];
-  let g = '';
-  // r -1: 첫 블록(N10)에는 X 를 반드시 쓴다
-  let at: Vec = { z: CLEAR_Z + faceZ, r: -1 };
-  const emit = (code: string, p: Vec, extra = '') => {
-    const words: string[] = [];
-    if (code !== g || code === 'G02' || code === 'G03') words.push(code);
-    if (Math.abs(p.r - at.r) > EPS) words.push(`X${fmt(2 * p.r)}`);
-    if (Math.abs(p.z - at.z) > EPS) words.push(`Z${fmt(p.z)}`);
-    if (extra) words.push(extra);
-    g = code;
-    at = p;
-    return words.join(' ');
-  };
-
-  // 첫 이동: 직선이면 그 직선을 Z2 까지 늘여서 들어간다 (모따기를 끊김 없이)
-  const first = out[0];
-  let rest = out;
-  let nStart: Vec;
-  if (first.kind === 'line' && first.b.z < first.a.z - EPS) {
-    const slope = (first.b.r - first.a.r) / (first.b.z - first.a.z);
-    const r = first.a.r + (CLEAR_Z + faceZ - first.a.z) * slope;
-    nStart = r >= 0 ? { z: CLEAR_Z + faceZ, r } : first.a;
-    rest = r >= 0 ? out.slice(1) : out;
-    body.push(`N10 ${emit('G00', { ...at, r: nStart.r })} ;`);
-    if (r >= 0) body.push(`${emit('G01', first.b, 'F0.1')} ;`);
-    else body.push(`${emit('G01', first.a, 'F0.1')} ;`);
-  } else {
-    nStart = first.a;
-    body.push(`N10 ${emit('G00', { ...at, r: nStart.r })} ;`);
-    body.push(`${emit('G01', first.a, 'F0.1')} ;`);
-  }
-  for (const m of rest) {
-    if (m.kind === 'line') {
-      const line = emit('G01', m.b);
-      if (line) body.push(`${line} ;`);
-    } else {
-      const R = Math.hypot(m.a.z - m.c.z, m.a.r - m.c.r);
-      // 180° 넘는 원호는 R 을 음수로
-      const a0 = Math.atan2(m.a.r - m.c.r, m.a.z - m.c.z);
-      const a1 = Math.atan2(m.b.r - m.c.r, m.b.z - m.c.z);
-      let sweep = m.ccw ? a1 - a0 : a0 - a1;
-      while (sweep <= 1e-9) sweep += Math.PI * 2;
-      body.push(`${emit(m.ccw ? 'G03' : 'G02', m.b, `R${fmt(sweep > Math.PI ? -R : R)}`)} ;`);
-    }
-  }
-  body.push(`N20 ${emit('G01', { ...at, r: D / 2 + 1 })} ;`);
+  const body = contourBody(out, faceZ, 10, 20, D / 2 + 1);
 
   const startX = fmt(D + 2);
   const faceStart = fmt(D + 4);
@@ -223,7 +329,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
   const zc = fmt(faceZ + CLEAR_Z);
   const code: string[] = [
     'O0001 ;',
-    '(모범 답안 : 도면 형상에서 자동으로 만든 외경 단면 · G71 황삭 · G70 정삭)',
+    `(모범 답안 : 도면 형상에서 자동으로 만든 외경 단면 · G71 황삭 · G70 정삭${innerRaw.length ? ' · 드릴 · 내경 보링' : ''})`,
     '(절삭 조건은 연습용 고정값입니다)',
   ];
   for (const gr of grooves)
@@ -251,6 +357,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
     'G28 U0. W0. M09 ;',
     'M05 ;',
   );
+  if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input));
 
   const inside = (z0: number, z1: number, what: string) => {
     if (z0 > faceZ + EPS || z1 < endZ - EPS) throw new Error(`${what} 구간 Z${fmt(z0)} ~ Z${fmt(z1)} 이 도면(Z${fmt(faceZ)} ~ Z${fmt(endZ)}) 밖에 있습니다`);
@@ -306,5 +413,5 @@ export function generateProgram(input: AutoInput): AutoProgram {
     );
   }
   code.push('M30 ;');
-  return { code: code.join('\n') + '\n', grooves };
+  return { code: code.join('\n') + '\n', grooves, bore: innerRaw.length > 0 };
 }

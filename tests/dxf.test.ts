@@ -199,3 +199,45 @@ describe('DXF 나사 · 널링 글자 찾기', () => {
     expect(r.text).not.toMatch(/나사|널링/);
   });
 });
+
+describe('DXF 내경(구멍) 찾기', () => {
+  const ax = 50;
+  // 부시: Ø40 x 30, 끝면 x=30, 관통 구멍 Ø20 (끝면 쪽 C1), 단면도 (구멍 선이 실선)
+  const bushHalf = (s: number): Ent[] =>
+    chain(
+      [
+        [30, ax + s * 11],
+        [30, ax + s * 20],
+        [0, ax + s * 20],
+        [0, ax + s * 10],
+        [29, ax + s * 10],
+        [30, ax + s * 11],
+      ].map(([x, y]) => [x, y] as [number, number]),
+    );
+
+  it('관통 구멍: (내경) 아래에 구멍 윤곽', () => {
+    const r = dxfToTarget(dxf([...bushHalf(1), ...bushHalf(-1), line(-5, ax, 40, ax, 'CENTER')], [['CENTER', 'CENTER']]));
+    const [outer, inner] = r.text.split('(내경)');
+    expect(inner).toBeDefined();
+    expect(outer).toContain('X22. Z0.');
+    expect(outer).toContain('X40.');
+    expect(inner.trim().split('\n')).toEqual(['X22. Z0.', 'G01 X20. Z-1.', 'G01 X20. Z-30.']);
+    const t = parseTarget(r.text).target!;
+    expect(t.inner).not.toBeNull();
+  });
+
+  it('막힌 구멍을 숨은선으로 그린 도면도 읽는다', () => {
+    // Ø40 x 30, 구멍 Ø16 깊이 15 (바닥 평평), 구멍은 숨은선
+    const outer: Ent[] = [
+      ...chain([[30, ax - 20], [30, ax + 20], [0, ax + 20], [0, ax - 20], [30, ax - 20]] as [number, number][]),
+    ];
+    const hid = (x1: number, y1: number, x2: number, y2: number) => line(x1, y1, x2, y2, 'HID');
+    const hole: Ent[] = [hid(30, ax + 8, 15, ax + 8), hid(15, ax + 8, 15, ax - 8), hid(15, ax - 8, 30, ax - 8)];
+    const r = dxfToTarget(dxf([...outer, ...hole, line(-5, ax, 40, ax, 'CENTER')], [['CENTER', 'CENTER'], ['HID', 'HIDDEN']]));
+    const inner = r.text.split('(내경)')[1];
+    expect(inner).toBeDefined();
+    expect(inner.trim().split('\n')).toEqual(['X16. Z0.', 'G01 X16. Z-15.', 'G01 X0. Z-15.']);
+    // 외경은 그대로
+    sameProfile(r.text.split('(내경)')[0], 'X0. Z0.\nX40.\nZ-30.\n');
+  });
+});

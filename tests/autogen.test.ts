@@ -108,3 +108,42 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     expect(gen([...base, '(널링 Z-10. ~ Z-40.)'].join('\n'))).toThrow(/도면\(Z0. ~ Z-20.\) 밖/);
   });
 });
+
+describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
+  const withDrill = (dia: number) => cfg.tools.map((t) => (t.type === 'drill' ? { ...t, width: dia } : t));
+  const run = (drawing: string, drillDia: number) => {
+    const tools = withDrill(drillDia);
+    const c = { ...cfg, tools };
+    const gen = generateProgram({ drawing, stock, tools, offsets: cfg.offsets });
+    const p = compile(gen.code, c);
+    expect(p.alarm).toBeNull();
+    const sim = new CutSim(p, stock, tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+    return { gen, res: compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05) };
+  };
+
+  it('관통 구멍 Ø20 (C1): 도면대로', () => {
+    const drawing = ['X22. Z0.', 'X40.', 'Z-30.', '(내경)', 'X22. Z0.', 'X20. Z-1.', 'Z-30.'].join('\n');
+    const { gen, res } = run(drawing, 16);
+    expect(gen.code).toContain('G74 Z-35.9 Q5000 F0.1 ;');
+    expect(gen.code).toContain('G71 P30 Q40 U-0.4 W0.1 F0.2 ;');
+    expect(gen.code).toContain('N30 G00 X26. ;');
+    expect(gen.code).toContain('G41 G00 X15. Z2. ;');
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.02);
+  });
+
+  it('막힌 구멍 Ø16 깊이 15 (바닥 평평): 드릴 끝을 바닥에 맞추고 보링으로 벽 · 바닥 정리', () => {
+    const drawing = ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', 'X16. Z0.', 'Z-15.', 'X0.'].join('\n');
+    const { gen, res } = run(drawing, 12);
+    expect(gen.code).toContain('G74 Z-15. Q5000');
+    expect(gen.code).toContain('N40 G01 X11. ;');
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.02);
+  });
+
+  it('드릴이 구멍보다 크면 알맞은 지름을 알려 준다', () => {
+    const drawing = ['X22. Z0.', 'X40.', 'Z-30.', '(내경)', 'X20. Z0.', 'Z-30.'].join('\n');
+    expect(() => generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets })).toThrow(/T11 드릴 지름을 Ø18 이하로/);
+  });
+});

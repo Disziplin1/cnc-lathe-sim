@@ -352,8 +352,8 @@ function makeAnswer(force: boolean) {
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');
     ansInfo.textContent = r.grooves.length
-      ? `외경 G71 / G70 · 홈 ${r.grooves.length}곳은 메워서 지나감 (주석 참고)`
-      : '외경 G71 황삭 / G70 정삭 · 절삭 조건은 고정값';
+      ? `${r.bore ? '외경 · 내경' : '외경'} G71 / G70 · 홈 ${r.grooves.length}곳은 메워서 지나감 (주석 참고)`
+      : `${r.bore ? '외경 + 드릴 · 내경 보링' : '외경'} G71 황삭 / G70 정삭 · 절삭 조건은 고정값`;
   } catch (e) {
     ansEditor.text = '';
     ansInfo.classList.add('err');

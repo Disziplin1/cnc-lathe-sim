@@ -38,6 +38,8 @@ const TAU = Math.PI * 2;
 /** 외곽선이 아닌 선 (레이어 이름 또는 선 종류) */
 const SKIP = /center|hidden|phantom|dash|dot|중심|숨은|가상|dim|치수|hatch|해치|text|문자/i;
 const CENTER = /center|dashdot|dash.?dot|중심|1점/i;
+/** 숨은선(파선): 단면이 아닌 도면에서는 구멍(내경)이 숨은선으로 그려지므로 외곽선처럼 읽는다 */
+const isHidden = (style: string) => /hidden|숨은|dash/i.test(style) && !CENTER.test(style) && !/dim|치수|hatch|해치|text|문자/i.test(style);
 
 interface RawEntity {
   type: string;
@@ -165,14 +167,14 @@ function toPrims(src: string): Parsed {
       const a = { x: fx * num(e, 10) * k, y: num(e, 20) * k };
       const b = { x: fx * num(e, 11) * k, y: num(e, 21) * k };
       allLines.push({ a, b });
-      if (SKIP.test(style)) {
+      if (SKIP.test(style) && !isHidden(style)) {
         const len = Math.abs(b.x - a.x);
         if (CENTER.test(style) && Math.abs(b.y - a.y) < EPS && (!axis || len > axis.len)) axis = { y: a.y, len };
         continue;
       }
       if (Math.hypot(b.x - a.x, b.y - a.y) > EPS) prims.push({ kind: 'line', a, b });
     } else if (e.type === 'ARC') {
-      if (SKIP.test(style)) continue;
+      if (SKIP.test(style) && !isHidden(style)) continue;
       const c = { x: fx * num(e, 10) * k, y: num(e, 20) * k };
       const r = num(e, 40) * k;
       let a0 = (num(e, 50) * Math.PI) / 180;
@@ -182,7 +184,7 @@ function toPrims(src: string): Parsed {
       while (a1 <= a0 + 1e-12) a1 += TAU;
       prims.push({ kind: 'arc', c, r, a0, a1 });
     } else if (e.type === 'LWPOLYLINE') {
-      if (SKIP.test(style)) continue;
+      if (SKIP.test(style) && !isHidden(style)) continue;
       const closed = (num(e, 70) & 1) === 1;
       const vs: { p: P; bulge: number }[] = [];
       for (const [c, v] of e.codes) {
@@ -192,7 +194,7 @@ function toPrims(src: string): Parsed {
       }
       pushPoly(prims, vs, closed);
     } else if (e.type === 'POLYLINE') {
-      if (SKIP.test(style)) continue;
+      if (SKIP.test(style) && !isHidden(style)) continue;
       const closed = (num(e, 70) & 1) === 1;
       const vs: { p: P; bulge: number }[] = [];
       for (let j = i + 1; j < entities.length && entities[j].type === 'VERTEX'; j++) {
@@ -417,19 +419,59 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
   const minX = Math.min(...path.map((e) => nodes[e.to].x));
   const cut = path.findIndex((e) => Math.abs(nodes[e.to].x - minX) < EPS);
   // T자로 나뉜 직선(나사 끝 선 등이 닿은 곳)은 한 줄로 다시 잇는다
-  const outline: Edge[] = [];
-  for (const e of path.slice(0, cut + 1)) {
-    const last = outline[outline.length - 1];
-    if (last && last.prim.kind === 'line' && e.prim.kind === 'line') {
-      const [p, q, r] = [nodes[last.from], nodes[last.to], nodes[e.to]];
-      const cross = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
-      const dot = (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y);
-      if (Math.abs(cross) < EPS * EPS && dot > 0) {
-        outline[outline.length - 1] = { prim: { kind: 'line', a: p, b: r }, rev: false, from: last.from, to: e.to };
-        continue;
+  const mergeLines = (edges: Edge[]) => {
+    const merged: Edge[] = [];
+    for (const e of edges) {
+      const last = merged[merged.length - 1];
+      if (last && last.prim.kind === 'line' && e.prim.kind === 'line') {
+        const [p, q, r] = [nodes[last.from], nodes[last.to], nodes[e.to]];
+        const cross = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
+        const dot = (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y);
+        if (Math.abs(cross) < EPS * EPS && dot > 0) {
+          merged[merged.length - 1] = { prim: { kind: 'line', a: p, b: r }, rev: false, from: last.from, to: e.to };
+          continue;
+        }
       }
+      merged.push(e);
     }
-    outline.push(e);
+    return merged;
+  };
+  const outline = mergeLines(path.slice(0, cut + 1));
+
+  // 내경: 끝면에서 왼쪽(척 쪽)으로 들어가는 선이 있는 가장 낮은 점에서 출발해
+  // 재료를 오른쪽(위)에 두고 가장 왼쪽 길을 따라간다 → 구멍 바닥(축) 또는 척 쪽 끝까지
+  const outlinePrims = new Set(path.slice(0, cut + 1).map((e) => e.prim));
+  const faceNodeX = nodes[start].x;
+  const intoHole = (e: Edge) => !outlinePrims.has(e.prim) && startDir(e).x < -0.3;
+  const innerStarts = nodes
+    .map((n, i) => ({ n, i }))
+    .filter(({ n, i }) => Math.abs(n.x - faceNodeX) < EPS && n.y > axis + EPS && (adj.get(i) ?? []).some(intoHole))
+    .sort((a, b) => a.n.y - b.n.y);
+  let innerPath: Edge[] = [];
+  if (innerStarts.length) {
+    const s = innerStarts[0].i;
+    const iused = new Set<Prim>(outlinePrims);
+    let at = s;
+    let dir: P = { x: 0, y: -1 };
+    const walk: Edge[] = [];
+    for (let guard = 0; guard < prims.length + 1; guard++) {
+      const outs = (adj.get(at) ?? []).filter((e) => !iused.has(e.prim));
+      if (!outs.length) break;
+      // 왼쪽으로 가장 많이 꺾는 길 (되돌아가는 길은 가장 나중)
+      const left = (e: Edge) => {
+        const t = rightTurn(dir, startDir(e));
+        return t === -Math.PI ? -Math.PI : -t;
+      };
+      const next = outs.reduce((best, e) => (left(e) > left(best) ? e : best));
+      iused.add(next.prim);
+      walk.push(next);
+      dir = endDir(next);
+      at = next.to;
+      if (Math.abs(nodes[at].y - axis) < EPS || Math.abs(nodes[at].x - minX) < EPS || at === s) break;
+    }
+    // 축(구멍 바닥 가운데)이나 척 쪽 끝에 닿아야 구멍으로 본다
+    const end = walk.length ? nodes[walk[walk.length - 1].to] : null;
+    if (end && (Math.abs(end.y - axis) < EPS || Math.abs(end.x - minX) < EPS)) innerPath = mergeLines(walk);
   }
 
   // 도면 좌표 → 선반 좌표 (Z = 끝면에서의 거리, X = 직경)
@@ -444,19 +486,26 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
   const s0 = nodes[start];
   let lines = 0;
   let arcs = 0;
-  out.push(word(s0));
-  for (const e of outline) {
-    const q = nodes[e.to];
-    if (e.prim.kind === 'line') {
-      out.push(`G01 ${word(q)}`);
-      lines++;
-    } else {
-      // 도면 좌표의 반시계 = 선반(Z 오른쪽, X 위) 의 반시계 = G03
-      const ccw = !e.rev;
-      const sweep = e.prim.a1 - e.prim.a0;
-      out.push(`${ccw ? 'G03' : 'G02'} ${word(q)} R${fmt(sweep > Math.PI ? -e.prim.r : e.prim.r)}`);
-      arcs++;
+  const emit = (edges: Edge[]) => {
+    for (const e of edges) {
+      const q = nodes[e.to];
+      if (e.prim.kind === 'line') {
+        out.push(`G01 ${word(q)}`);
+        lines++;
+      } else {
+        // 도면 좌표의 반시계 = 선반(Z 오른쪽, X 위) 의 반시계 = G03
+        const ccw = !e.rev;
+        const sweep = e.prim.a1 - e.prim.a0;
+        out.push(`${ccw ? 'G03' : 'G02'} ${word(q)} R${fmt(sweep > Math.PI ? -e.prim.r : e.prim.r)}`);
+        arcs++;
+      }
     }
+  };
+  out.push(word(s0));
+  emit(outline);
+  if (innerPath.length) {
+    out.push('(내경)', word(nodes[innerPath[0].from]));
+    emit(innerPath);
   }
 
   const pts = [s0, ...outline.map((e) => nodes[e.to])];
