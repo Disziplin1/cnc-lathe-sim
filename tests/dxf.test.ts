@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { dxfToTarget } from '../src/sim/dxf';
 import { parseTarget } from '../src/sim/compare';
+import { fitStock } from '../src/sim/simulator';
 
 type Ent = [string, [number, string | number][]];
 
@@ -145,5 +146,16 @@ describe('DXF 불러오기', () => {
   it('외곽선이 없으면 알려 준다', () => {
     expect(() => dxfToTarget(dxf([['TEXT', [[8, '0'], [1, 'hello']]]]))).toThrow(/외곽선/);
     expect(() => dxfToTarget('hello')).toThrow(/DXF/);
+  });
+});
+
+describe('도면에 맞춰 소재 늘리기', () => {
+  const stock = { diameter: 50, length: 91, grip: 20, faceAllowance: 1 };
+  it('작으면 지름은 5mm 단위로, 길이는 도면 + 10mm 나오게 늘린다', () => {
+    expect(fitStock(stock, 55, 65)).toEqual({ diameter: 60, length: 75 + 21, grip: 20, faceAllowance: 1 });
+  });
+  it('이미 충분하면 그대로 (줄이지 않는다)', () => {
+    expect(fitStock(stock, 46, 55)).toEqual(stock);
+    expect(fitStock(stock, 20, 10)).toEqual(stock);
   });
 });

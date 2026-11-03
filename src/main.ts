@@ -20,7 +20,7 @@ import { compareStock, parseTarget, threadRanges, type CompareResult, type Targe
 import { dxfToTarget } from './sim/dxf';
 import { generateProgram } from './nc/autogen';
 import { Player, STATE_LABEL } from './sim/player';
-import { normalizeStock, protrusionOf, type StockConfig } from './sim/simulator';
+import { fitStock, normalizeStock, protrusionOf, type StockConfig } from './sim/simulator';
 import { SAMPLES } from './samples';
 import { NcEditor } from './ui/editor';
 import { codeHover } from './ui/codeinfo';
@@ -250,6 +250,17 @@ async function importDxf(f: File) {
     el.cmp.checked = true;
     dxfInfo.classList.remove('err');
     dxfInfo.textContent = `최대 Ø${r.maxDia.toFixed(1)} × 길이 ${r.length.toFixed(1)} · 직선 ${r.lines} · 원호 ${r.arcs}`;
+    // 도면이 소재보다 크면 소재를 늘린다
+    const s = fitStock(settings.stock, r.maxDia, r.length);
+    if (s.diameter !== settings.stock.diameter || s.length !== settings.stock.length) {
+      settings.stock = s;
+      fillStockBar();
+      view3d.setStockConfig(s);
+      rebuild();
+      view2d.fit();
+      save();
+      dxfInfo.textContent += ` · 소재를 Ø${s.diameter} × ${s.length} 로 늘림`;
+    }
   } catch (e) {
     dxfInfo.classList.add('err');
     dxfInfo.textContent = (e as Error).message;
