@@ -197,7 +197,10 @@ const dwgEditor = new NcEditor(
   () => {
     save();
     clearTimeout(dwgTimer);
-    dwgTimer = window.setTimeout(parseDrawing, 300);
+    dwgTimer = window.setTimeout(() => {
+      parseDrawing();
+      followAnswer();
+    }, 300);
   },
   [codeHover((code) => openCodebook(code))],
 );
@@ -254,6 +257,7 @@ async function importDxf(f: File) {
     if (r.flipped) left.checked = !left.checked;
     dwgEditor.text = r.text;
     parseDrawing();
+    followAnswer();
     el.cmp.checked = true;
     dxfInfo.classList.remove('err');
     dxfInfo.textContent =
@@ -270,6 +274,7 @@ async function importDxf(f: File) {
       rebuild();
       view2d.fit();
       save();
+      followAnswer();
       dxfInfo.textContent += ` · 소재를 Ø${s.diameter} × ${s.length} 로 늘림`;
     }
   } catch (e) {
@@ -346,6 +351,11 @@ function showPane(pane: Pane) {
 // ---- 모범 답안: 도면 · 소재 · 공구가 바뀌었을 때만 다시 만든다 ----
 let answerKey = '';
 const ansInfo = $('ans-info');
+/** 모범 답안을 돌리는 중에 도면 · 소재 · 공구가 바뀌면 답안도 바로 새로 만든다 (안 그러면 예전 도면의 답안이 돈다) */
+function followAnswer() {
+  if (active === ansEditor) makeAnswer(false);
+}
+
 function makeAnswer(force: boolean) {
   const input = { drawing: dwgEditor.text, stock: settings.stock, tools: settings.tools, offsets: settings.offsets };
   const key = JSON.stringify(input);
@@ -880,6 +890,7 @@ dlg.addEventListener('close', () => {
   rebuild();
   view2d.fit();
   save();
+  followAnswer();
 });
 
 // 공구 보정 화면
@@ -955,6 +966,7 @@ function onStockInput() {
     rebuild();
     view2d.fit();
     save();
+    followAnswer();
   }, 400);
 }
 for (const i of [el.qDia, el.qLen, el.qGrip, el.qFace]) i.addEventListener('input', onStockInput);
