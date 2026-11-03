@@ -335,57 +335,81 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): stri
 }
 
 /**
- * G71 이 메운 홈을 홈 바이트로 G75 (바닥이 평평한 부분만, 기준점 = 척 쪽 모서리, 날폭은 +Z).
+ * G71 이 메운 홈을 홈 바이트로 깎는다 (공구는 한 번만 불러서 홈을 차례로).
+ * 바닥이 평평한 부분은 G75, 홈 옆 모따기·경사는 바이트 모서리로 G01 로 따라간다
+ * (끝면 쪽 경사 = 끝면 쪽 모서리, 척 쪽 경사 = 척 쪽 모서리. 기준점 = 척 쪽 모서리, 날폭은 +Z).
  * moves 는 홈을 찾을 때 쓴 형상 (내경이면 반경을 뒤집은 것), side = 1 외경 / -1 내경.
- * 바이트보다 좁은 홈, 홈 옆의 모따기, 척 쪽 끝의 모따기·단은 남기고 주석으로 알린다.
+ * 바이트보다 좁은 홈, 척 쪽 끝의 모따기·단은 남기고 주석으로 알린다.
  */
 function grooveBlocks(grooves: Groove[], moves: DrawingMove[], side: 1 | -1, tool: ToolDef | undefined, faceZ: number, D: number): string[] {
-  const out: string[] = [];
+  const notes: string[] = [];
+  const cuts: string[][] = [];
   const name = side > 0 ? '홈' : '내경 홈';
+  const toolName = side > 0 ? '홈 바이트' : '내경 홈 바이트';
   const pts = moves.flatMap(points);
+  const X = (r: number) => `X${fmt(2 * side * r)}`;
+  const w = tool && tool.width > 0 ? tool.width : 3;
   for (const g of grooves) {
-    const real = (r: number) => side * r;
     const where = `Z${fmt(g.z0)} ~ Z${fmt(g.z1)} Ø${fmt(Math.abs(g.minDia))}`;
     if (g.toEnd) {
-      out.push(`(${name} ${where} : 척 쪽 끝의 모따기·단은 반대로 물려서 2차 가공)`);
+      notes.push(`(${name} ${where} : 척 쪽 끝의 모따기·단은 반대로 물려서 2차 가공)`);
       continue;
     }
     if (!tool) {
-      out.push(`(${name} ${where} : 설정에 ${side > 0 ? '홈 바이트' : '내경 홈 바이트'}가 없어 메워서 지나감)`);
+      notes.push(`(${name} ${where} : 설정에 ${toolName}가 없어 메워서 지나감)`);
       continue;
     }
     // 바닥(가장 깊은 곳)이 평평한 Z 범위
-    const inside = pts.filter((p) => p.z <= g.z0 + EPS && p.z >= g.z1 - EPS);
-    const deep = Math.min(...inside.map((p) => p.r));
-    const flat = inside.filter((p) => p.r < deep + 0.005).map((p) => p.z);
+    const inside = pts.filter((q) => q.z <= g.z0 + EPS && q.z >= g.z1 - EPS);
+    const deep = Math.min(...inside.map((q) => q.r));
+    const flat = inside.filter((q) => q.r < deep + 0.005).map((q) => q.z);
     const za = Math.max(...flat);
     const zb = Math.min(...flat);
-    const w = tool.width > 0 ? tool.width : 3;
     if (za - zb < w - 1e-6) {
-      out.push(`(${name} ${where} : 홈 폭 ${fmt(za - zb)} 이 바이트 폭 ${fmt(w)} 보다 좁아 메워서 지나감)`);
+      notes.push(`(${name} ${where} : 홈 폭 ${fmt(za - zb)} 이 바이트 폭 ${fmt(w)} 보다 좁아 메워서 지나감)`);
       continue;
     }
-    const startX = fmt(2 * real(g.level) + 2 * side);
+    const start = g.level + 1;
     const q = Math.max(100, Math.floor((w * 800) / 100) * 100);
-    const t = toolCode(tool.no);
-    out.push(
-      `(${name} ${where} : ${side > 0 ? '홈 바이트' : '내경 홈 바이트'} 폭 ${fmt(w)} · G75 로 1mm 씩 쪼아 들어감, 기준점 = 척 쪽 모서리)`,
-      ...[
-        ...(za < g.z0 - 0.01 ? [`Z${fmt(g.z0)} ~ Z${fmt(za)}`] : []),
-        ...(zb > g.z1 + 0.01 ? [`Z${fmt(zb)} ~ Z${fmt(g.z1)}`] : []),
-      ].map((r) => `(홈 옆 모따기·경사 ${r} 는 남음)`),
-      `${t.slice(0, 3)}00 ;`,
-      'G97 S500 M03 ;',
-      `G00 X${startX} Z${fmt(faceZ + 5)} ${t} M08 ;`,
-      `Z${fmt(za - w)} ;`,
+    const body = [
+      `(${name} ${where} : G75 로 1mm 씩 쪼아 들어감)`,
+      `G00 ${X(start)} Z${fmt(za - w)} ;`,
       'G75 R0.5 ;',
-      `G75 X${fmt(2 * real(deep))} Z${fmt(zb)} P1000 Q${q} F0.07 ;`,
-      side > 0 ? `G00 X${fmt(D + 4)} ;` : `G00 Z${fmt(faceZ + 5)} ;`,
-      'G28 U0. W0. M09 ;',
-      'M05 ;',
-    );
+      `G75 ${X(deep)} Z${fmt(zb)} P1000 Q${q} F0.07 ;`,
+    ];
+    // 홈 벽(바닥보다 높은 점)을 형상 순서대로, 같은 점은 한 번만
+    const wall = (keep: (q: Vec) => boolean) =>
+      inside.filter((q) => keep(q) && q.r > deep + 0.005).filter((q, i, arr) => i === 0 || !same(q, arr[i - 1]));
+    // 끝면 쪽 경사: 바닥에서 끝면 쪽 모서리로 벽을 따라 올라간다
+    const faceSide = wall((q) => q.z > za - EPS).reverse();
+    if (faceSide.some((q) => q.z > za + EPS)) {
+      body.push(`(끝면 쪽 모따기 Z${fmt(za)} ~ Z${fmt(g.z0)} : 바이트 끝면 쪽 모서리로 따라감)`, `G01 ${X(deep)} F0.05 ;`);
+      for (const p of faceSide) body.push(`${X(p.r)} Z${fmt(p.z - w)} ;`);
+      body.push(`G00 ${X(start)} ;`);
+    }
+    // 척 쪽 경사: 바닥에서 척 쪽 모서리로 벽을 따라 올라간다
+    const chuckSide = wall((q) => q.z < zb + EPS);
+    if (chuckSide.some((q) => q.z < zb - EPS)) {
+      body.push(`(척 쪽 모따기 Z${fmt(zb)} ~ Z${fmt(g.z1)} : 바이트 척 쪽 모서리로 따라감)`, `G00 Z${fmt(zb)} ;`, `G01 ${X(deep)} F0.05 ;`);
+      for (const p of chuckSide) body.push(`${X(p.r)} Z${fmt(p.z)} ;`);
+      body.push(`G00 ${X(start)} ;`);
+    }
+    // 다음 홈으로: 외경은 소재 밖으로, 내경은 구멍 밖(끝면 앞)으로 나간다
+    body.push(side > 0 ? `G00 X${fmt(D + 4)} ;` : `G00 Z${fmt(faceZ + 5)} ;`);
+    cuts.push(body);
   }
-  return out;
+  if (!cuts.length || !tool) return notes;
+  const t = toolCode(tool.no);
+  return [
+    ...notes,
+    `(${toolName} 폭 ${fmt(w)} : 기준점 = 척 쪽 모서리, 날폭은 끝면 쪽으로)`,
+    `${t.slice(0, 3)}00 ;`,
+    'G97 S500 M03 ;',
+    `G00 ${side > 0 ? `X${fmt(D + 4)}` : 'X0.'} Z${fmt(faceZ + 5)} ${t} M08 ;`,
+    ...cuts.flat(),
+    'G28 U0. W0. M09 ;',
+    'M05 ;',
+  ];
 }
 
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
@@ -472,31 +496,32 @@ export function generateProgram(input: AutoInput): AutoProgram {
     if (z0 > faceZ + EPS || z1 < endZ - EPS) throw new Error(`${what} 구간 Z${fmt(z0)} ~ Z${fmt(z1)} 이 도면(Z${fmt(faceZ)} ~ Z${fmt(endZ)}) 밖에 있습니다`);
   };
 
-  // 널링: 정삭이 끝난 지름에 롤러를 눌러 Z 방향으로 지나간다 (깎지 않음)
+  // 널링: 정삭이 끝난 지름에 롤러를 눌러 Z 방향으로 지나간다 (깎지 않음). 공구는 한 번만 불러서 끝면 쪽 구간부터
   const knurlTool = input.tools.find((t) => t.type === 'knurl');
-  for (const k of feat.knurls) {
-    inside(k.z0, k.z1, '널링');
-    if (!knurlTool) {
-      code.push(`(널링 Z${fmt(k.z0)} ~ Z${fmt(k.z1)} : 설정에 널링 공구가 없어 생략)`);
-      continue;
-    }
-    const d = 2 * radiusAt(out, (k.z0 + k.z1) / 2);
-    const w = Math.min(knurlTool.width > 0 ? knurlTool.width : 8, k.z0 - k.z1) / 2;
+  const knurls = [...feat.knurls].sort((a, b) => b.z0 - a.z0);
+  for (const k of knurls) inside(k.z0, k.z1, '널링');
+  if (knurls.length && !knurlTool) code.push(`(널링 : 설정에 널링 공구가 없어 생략)`);
+  if (knurls.length && knurlTool) {
+    const t = toolCode(knurlTool.no);
     code.push(
-      `(널링 Z${fmt(k.z0)} ~ Z${fmt(k.z1)} Ø${fmt(d)} : 저속으로 롤러를 눌러 무늬를 냄. 기준점 = 롤러 폭 가운데)`,
-      `${toolCode(knurlTool.no).slice(0, 3)}00 ;`,
+      '(널링 : 저속으로 롤러를 눌러 무늬를 냄. 기준점 = 롤러 폭 가운데. 누른 채로 급속 후퇴하면 충돌이므로 이송으로 빼낸다)',
+      `${t.slice(0, 3)}00 ;`,
       'G97 S150 M03 ;',
-      `G00 X${fmt(D + 4)} Z${fmt(faceZ + 5)} ${toolCode(knurlTool.no)} M08 ;`,
-      `Z${fmt(k.z0 - w)} ;`,
-      `G01 X${fmt(d - 0.4)} F0.1 ;`,
-      `Z${fmt(k.z1 + w)} F0.2 ;`,
-      '(누른 채로 급속 후퇴하면 충돌이므로 이송으로 빼낸다)',
-      `X${fmt(d + 2)} F0.5 ;`,
-      `G00 X${fmt(D + 4)} ;`,
-      `Z${fmt(faceZ + 5)} ;`,
-      'G28 U0. W0. M09 ;',
-      'M05 ;',
+      `G00 X${fmt(D + 4)} Z${fmt(faceZ + 5)} ${t} M08 ;`,
     );
+    for (const k of knurls) {
+      const d = 2 * radiusAt(out, (k.z0 + k.z1) / 2);
+      const w = Math.min(knurlTool.width > 0 ? knurlTool.width : 8, k.z0 - k.z1) / 2;
+      code.push(
+        `(널링 Z${fmt(k.z0)} ~ Z${fmt(k.z1)} Ø${fmt(d)})`,
+        `G00 Z${fmt(k.z0 - w)} ;`,
+        `G01 X${fmt(d - 0.4)} F0.1 ;`,
+        `Z${fmt(k.z1 + w)} F0.2 ;`,
+        `X${fmt(d + 2)} F0.5 ;`,
+        `G00 X${fmt(D + 4)} ;`,
+      );
+    }
+    code.push(`Z${fmt(faceZ + 5)} ;`, 'G28 U0. W0. M09 ;', 'M05 ;');
   }
 
   // 나사: G76 (산높이 0.6134P, 첫 절입 ≈ 산높이의 38%, 정삭 2회)

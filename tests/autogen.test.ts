@@ -48,8 +48,8 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     expect(gen.grooves[0].z0).toBeCloseTo(-18, 3);
     expect(gen.grooves[0].z1).toBeCloseTo(-22, 3);
     expect(gen.grooves[0].minDia).toBeCloseTo(16, 3);
-    expect(gen.code).toContain('(홈 Z-18. ~ Z-22. Ø16. : 홈 바이트 폭 3');
-    expect(gen.code).toContain('Z-21. ;');
+    expect(gen.code).toContain('(홈 Z-18. ~ Z-22. Ø16. : G75 로 1mm 씩 쪼아 들어감)');
+    expect(gen.code).toContain('G00 X22. Z-21. ;');
     expect(gen.code).toContain('G75 X16. Z-22. P1000 Q2400 F0.07 ;');
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.02);
@@ -194,7 +194,8 @@ describe('모범 답안: 내경 홈', () => {
     const drawing = ['X30. Z0.', 'X40.', 'Z-30.', '(내경)', 'X30. Z0.', 'Z-10.', 'X34.', 'Z-13.', 'X30.', 'Z-30.'].join('\n');
     const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
     expect(gen.code).toContain('T0600 ;');
-    expect(gen.code).toContain('G00 X28. Z5. T0606 M08 ;');
+    expect(gen.code).toContain('G00 X0. Z5. T0606 M08 ;');
+    expect(gen.code).toContain('G00 X28. Z-12. ;');
     expect(gen.code).toContain('G75 X34. Z-13. P1000 Q1600 F0.07 ;');
     const p = compile(gen.code, cfg);
     expect(p.alarm).toBeNull();
@@ -203,5 +204,26 @@ describe('모범 답안: 내경 홈', () => {
     const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.02);
+  });
+});
+
+describe('모범 답안: 홈 모따기 · 널링 묶기', () => {
+  it('홈 입구 모따기는 바이트 끝면 쪽 모서리로 따라 깎는다', () => {
+    const drawing = ['X30. Z0.', 'X40.', 'Z-30.', '(내경)', 'X30. Z0.', 'Z-10.', 'X32. Z-11.', 'X34.', 'Z-14.', 'X30.', 'Z-30.'].join('\n');
+    const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('G01 X34. F0.05 ;\nX32. Z-13. ;\nX30. Z-12. ;');
+    const p = compile(gen.code, cfg);
+    const sim = new CutSim(p, stock, cfg.tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+    const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.02);
+  });
+
+  it('널링이 여러 구간이면 공구를 한 번만 불러서 끝면 쪽부터', () => {
+    const drawing = ['X0. Z0.', 'X30.', 'Z-20.', 'X40.', 'Z-50.', '(널링 Z-20. ~ Z-50.)', '(널링 Z0. ~ Z-20.)'].join('\n');
+    const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code.match(/T1200 ;/g)).toHaveLength(1);
+    expect(gen.code.indexOf('(널링 Z0. ~ Z-20.')).toBeLessThan(gen.code.indexOf('(널링 Z-20. ~ Z-50.'));
   });
 });
