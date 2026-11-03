@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CNC 선반 연습기</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">CNC 선반 G코드 연습기</div>
+      <div class="file-actions">
+        <select id="sample" title="예제 불러오기"></select>
+        <button id="btn-open" title="파일 열기 (.nc, .txt)">열기</button>
+        <button id="btn-save" title="파일로 저장">저장</button>
+        <button id="btn-offsets" title="공구 보정 화면 (X, Z, R, T)">공구 보정</button>
+        <button id="btn-settings" title="소재·공구·기계 설정">설정</button>
+        <button id="btn-help" title="지원 코드 보기">도움말</button>
+        <input id="file-input" type="file" accept=".nc,.txt,.tap,.cnc" hidden />
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="left">
+        <div class="pane-tabs">
+          <button data-pane="prog" class="active">프로그램</button>
+          <button data-pane="dwg" title="완성품 외곽선. 깎은 결과와 비교합니다">도면 (목표 형상)</button>
+          <button data-pane="book" title="G코드·M코드 설명과 검색">코드 사전</button>
+          <span id="prog-info" class="muted"></span>
+        </div>
+        <div id="editor" class="editor"></div>
+        <div id="dwg-bar" class="dwg-bar" hidden>
+          <button id="btn-dxf" title="CAD 도면(DXF)에서 중심선 위쪽 바깥 외곽선을 읽어 옵니다">DXF 불러오기</button>
+          <label class="check" title="도면에서 끝면(Z0)이 왼쪽, 척이 오른쪽에 있으면 체크"><input type="checkbox" id="chk-dxf-left" /> 끝면이 왼쪽</label>
+          <span id="dxf-info" class="muted"></span>
+          <input type="file" id="file-dxf" accept=".dxf,.DXF" hidden />
+        </div>
+        <div id="editor-dwg" class="editor" hidden></div>
+        <div id="codebook" class="codebook" hidden></div>
+        <div class="pane-title">알람 / 경고 <span id="msg-count" class="muted"></span></div>
+        <ul id="messages" class="messages"></ul>
+      </section>
+
+      <section class="right">
+        <div class="view-tabs">
+          <button data-view="2d" class="active">2D 공구경로</button>
+          <button data-view="3d">3D 소재</button>
+          <button data-view="both">둘 다</button>
+          <label class="check" title="도면 탭의 목표 형상과 비교"><input type="checkbox" id="chk-compare" /> 도면 비교</label>
+          <span id="compare" class="compare"></span>
+          <span class="spacer"></span>
+          <span id="hover" class="muted mono"></span>
+          <button id="btn-fit" title="전체 보기">⤢ 맞춤</button>
+        </div>
+        <div class="stock-bar">
+          <b>소재</b>
+          <label>Ø <input type="number" id="q-dia" min="5" max="300" step="any" title="소재 지름" /></label>
+          <label>× 길이 <input type="number" id="q-len" min="10" max="1000" step="any" title="소재 전체 길이" /> mm</label>
+          <label class="muted">척 물림 <input type="number" id="q-grip" min="5" max="200" step="any" title="척에 물린 길이" /></label>
+          <label class="muted">끝면 여유 <input type="number" id="q-face" min="0" max="20" step="any" title="Z0 보다 앞으로 남은 소재 (단면 가공량)" /></label>
+          <span id="q-info" class="muted"></span>
+        </div>
+        <div id="views" class="views mode-2d">
+          <canvas id="view2d"></canvas>
+          <div id="view3d"></div>
+        </div>
+
+        <div class="timeline">
+          <span id="tl-now" class="mono">0:00</span>
+          <input type="range" id="timeline" min="0" max="1000" step="1" value="0" title="끌어서 원하는 시점으로 이동 (일시정지 상태가 됨)" />
+          <span id="tl-end" class="mono">0:00</span>
+        </div>
+        <div class="controls">
+          <button id="btn-start" class="primary" title="사이클 스타트 (F5)">▶ 시작</button>
+          <button id="btn-hold" title="이송 정지 (F6)">⏸ 정지</button>
+          <button id="btn-reset" title="리셋 (Esc)">⟲ 리셋</button>
+          <button id="btn-finish" title="정지 없이 끝까지 실행해서 결과 보기">⏭ 결과 바로 보기</button>
+          <label class="check"><input type="checkbox" id="chk-single" /> 싱글블록</label>
+          <label class="check"><input type="checkbox" id="chk-optstop" /> M01 선택정지</label>
+          <label class="check"><input type="checkbox" id="chk-skip" checked /> / 블록스킵</label>
+          <label class="check" title="급속 이동(G00·사이클 복귀)만 느리게. 실제 조작반의 급속 오버라이드">급속
+            <select id="rapid-ovr">
+              <option value="1">100%</option>
+              <option value="0.5">50%</option>
+              <option value="0.25">25%</option>
+              <option value="0.1">10%</option>
+              <option value="0.03">F0</option>
+            </select>
+          </label>
+          <div class="speed-box">
+            <div class="speed">
+              속도
+              <button id="spd-down" class="step" title="0.1 배 느리게 (누르고 있으면 계속)">−</button>
+              <input type="number" id="speed" min="0.1" max="200" step="0.1" value="1" title="재생 배속 (직접 입력 가능)" />
+              <span class="muted">배</span>
+              <button id="spd-up" class="step" title="0.1 배 빠르게 (누르고 있으면 계속)">+</button>
+            </div>
+            <div class="speed-presets">
+              <button data-speed="0.5">0.5배</button>
+              <button data-speed="1">1배속</button>
+              <button data-speed="2">2배속</button>
+              <button data-speed="3">3배속</button>
+              <button data-speed="5">5배속</button>
+              <button data-speed="10">10배속</button>
+              <button data-speed="20">20배속</button>
+              <button data-speed="50">50배속</button>
+              <button data-speed="100">100배속</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="status">
+          <div class="st-pos">
+            <div class="st-label">절대 좌표</div>
+            <div class="axis"><span>X</span><b id="pos-x" class="mono">0.000</b></div>
+            <div class="axis"><span>Z</span><b id="pos-z" class="mono">0.000</b></div>
+          </div>
+          <div class="st-grid">
+            <div><span class="st-label">상태</span><b id="st-state">대기</b></div>
+            <div><span class="st-label">공구</span><b id="st-tool" class="mono">T0000</b></div>
+            <div><span class="st-label">이송 F</span><b id="st-feed" class="mono">0</b></div>
+            <div><span class="st-label">주축</span><b id="st-spindle" class="mono">0 rpm</b></div>
+            <div><span class="st-label">절삭유</span><b id="st-coolant">OFF</b></div>
+            <div><span class="st-label">가공 시간</span><b id="st-time" class="mono">0:00 / 0:00</b></div>
+          </div>
+          <div class="st-block">
+            <div class="st-label">모달</div>
+            <div id="st-modal" class="mono modal"></div>
+            <div class="st-label">실행 블록</div>
+            <div id="st-block" class="mono block"></div>
+            <div id="st-note" class="note"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="dlg-settings">
+      <form method="dialog" class="dlg">
+        <h2>설정</h2>
+        <p class="muted small">소재 크기는 화면 위쪽 "소재" 칸에서 바꿉니다.</p>
+        <fieldset>
+          <legend>기계</legend>
+          <label>기계 원점 X (직경) <input type="number" id="s-homex" step="1" /></label>
+          <label>기계 원점 Z <input type="number" id="s-homez" step="1" /></label>
+          <label>급속 속도 (mm/min) <input type="number" id="s-rapid" min="1000" max="60000" step="1000" /></label>
+          <label>최고 회전수 (rpm) <input type="number" id="s-maxrpm" min="500" max="10000" step="100" /></label>
+          <label
+            >소수점 없는 좌표 (X50)
+            <select id="s-decimal">
+              <option value="mm">mm 로 해석 + 경고 (연습용)</option>
+              <option value="fanuc">실제 Fanuc 처럼 0.001mm 로 해석</option>
+              <option value="strict">알람 (STEP 학습프로그램 방식)</option>
+            </select>
+          </label>
+        </fieldset>
+        <fieldset>
+          <legend>공구대</legend>
+          <table class="tools">
+            <thead>
+              <tr><th>번호</th><th>공구</th><th>홈 폭 / 드릴 직경</th><th>노즈 R</th></tr>
+            </thead>
+            <tbody id="s-tools"></tbody>
+          </table>
+        </fieldset>
+        <div class="dlg-actions">
+          <button value="cancel">취소</button>
+          <button id="s-apply" value="ok" class="primary">적용</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-offsets">
+      <form method="dialog" class="dlg">
+        <h2>공구 보정 (형상)</h2>
+        <p class="muted small">
+          T0303 처럼 뒤 두 자리가 보정번호입니다. X 는 직경값이라 +0.1 이면 지름이 0.1 커집니다.<br />
+          R·T 는 G41/G42 인선R보정에 쓰입니다. 외경 공구 T=3, 내경(보링) 공구 T=2.
+        </p>
+        <div class="offset-scroll">
+          <table class="tools offsets">
+            <thead>
+              <tr><th>번호</th><th>X</th><th>Z</th><th>R</th><th>T</th></tr>
+            </thead>
+            <tbody id="o-rows"></tbody>
+          </table>
+        </div>
+        <div class="dlg-actions">
+          <button id="o-reset" class="left">기본값</button>
+          <button value="cancel">취소</button>
+          <button value="ok" class="primary">적용</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-help">
+      <form method="dialog" class="dlg help">
+        <h2>지원 코드</h2>
+        <table>
+          <tr><td>G00</td><td>급속 이송 (축별 독립 이동이라 경로가 꺾임)</td></tr>
+          <tr><td>G01</td><td>직선 절삭</td></tr>
+          <tr><td>G02 / G03</td><td>원호 절삭 (시계 / 반시계), R 또는 I·K</td></tr>
+          <tr><td>G04</td><td>일시 정지 (P: ms, X/U: 초)</td></tr>
+          <tr><td>G28</td><td>기계 원점 복귀 (U0. W0.)</td></tr>
+          <tr><td>G32</td><td>나사 절삭 (F = 리드)</td></tr>
+          <tr><td>G41 / G42 / G40</td><td>인선R보정 왼쪽 / 오른쪽 / 취소 (외경은 G42, 내경은 G41)</td></tr>
+          <tr><td>G50</td><td>S: 최고 회전수 제한 / X Z: 좌표계 설정</td></tr>
+          <tr><td>G70</td><td>정삭 사이클: G70 P(시작 N) Q(끝 N)</td></tr>
+          <tr><td>G71</td><td>내·외경 황삭: G71 U(절입) R(도피) ; G71 P Q U(X여유) W(Z여유) F</td></tr>
+          <tr><td>G72</td><td>단면 황삭: G72 W(절입) R(도피) ; G72 P Q U W F</td></tr>
+          <tr><td>G73</td><td>형상 반복: G73 U(X도피) W(Z도피) R(횟수) ; G73 P Q U W F</td></tr>
+          <tr><td>G74</td><td>단면 펙 (드릴): G74 R(후퇴) ; G74 X Z P(X이동,µm) Q(Z절입,µm) F</td></tr>
+          <tr><td>G75</td><td>외경 홈 펙: G75 R(후퇴) ; G75 X Z P(X절입,µm) Q(Z이동,µm) F</td></tr>
+          <tr><td>G76</td><td>복합 나사: G76 P(정삭횟수·모따기·각도) Q(최소절입,µm) R(정삭여유) ;<br />G76 X(골지름) Z R(테이퍼) P(산높이,µm) Q(첫절입,µm) F(리드)</td></tr>
+          <tr><td>G90</td><td>내·외경 절삭 사이클 (R: 테이퍼)</td></tr>
+          <tr><td>G92</td><td>나사 절삭 사이클</td></tr>
+          <tr><td>G94</td><td>단면 절삭 사이클</td></tr>
+          <tr><td>G96 / G97</td><td>주속 일정 (m/min) / 회전수 일정 (rpm)</td></tr>
+          <tr><td>G98 / G99</td><td>분당 이송 / 회전당 이송</td></tr>
+          <tr><td>M00 / M01</td><td>프로그램 정지 / 선택 정지</td></tr>
+          <tr><td>M03 / M04 / M05</td><td>주축 정회전 / 역회전 / 정지</td></tr>
+          <tr><td>M08 / M09</td><td>절삭유 ON / OFF</td></tr>
+          <tr><td>M30</td><td>프로그램 끝</td></tr>
+          <tr><td>T□□△△</td><td>공구번호 + 보정번호 (예: T0303)</td></tr>
+          <tr><td>( )</td><td>주석, / 는 블록 스킵</td></tr>
+        </table>
+        <p class="muted">G71/G72 는 단조 형상(Type I)만 지원합니다. 도면 탭: 첫 줄 X0. Z0. 부터 척 쪽으로 외곽선을 G01/G02/G03 형식으로 씁니다.</p>
+        <p class="muted">2D 화면: 휠 = 확대/축소, 드래그 = 이동, 경로 클릭 = 해당 줄로 이동</p>
+        <div class="dlg-actions"><button class="primary">닫기</button></div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
