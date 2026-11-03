@@ -147,10 +147,22 @@ const editor = new NcEditor(
   initialProgram,
   () => {
     save();
+    // 치고 있는 줄은 다 치고 넘어갈 때까지 오류를 보여 주지 않는다
+    if (editor.view.hasFocus) typingLine = editor.cursorLine;
     scheduleCompile();
   },
   [codeHover((code) => openCodebook(code))],
 );
+
+/** 지금 입력 중인 줄 (그 줄의 알람·경고는 잠시 숨긴다) */
+let typingLine: number | null = null;
+function finishTyping() {
+  if (typingLine === null) return;
+  typingLine = null;
+  renderMessages();
+}
+// 다른 줄로 가거나(엔터 포함) 편집기 밖을 누르면 검사 결과를 보여 준다
+editor.view.contentDOM.addEventListener('blur', finishTyping);
 
 // 도면(목표 형상) 편집기
 let target: Target | null = null;
@@ -330,8 +342,15 @@ function renderMessages() {
   if (runtime) list.push(runtime);
   if (prog.alarm) list.push(prog.alarm);
   list.push(...prog.warnings);
+  const typing = list.filter((a) => a.line === typingLine);
+  list.splice(0, list.length, ...list.filter((a) => a.line !== typingLine));
   el.messages.replaceChildren();
-  if (list.length === 0) {
+  if (typing.length) {
+    const li = document.createElement('li');
+    li.className = 'typing';
+    li.textContent = `✎ ${typingLine! + 1}행 입력 중 · 다른 줄로 넘어가면 검사합니다`;
+    el.messages.append(li);
+  } else if (list.length === 0) {
     const li = document.createElement('li');
     li.className = 'ok';
     li.textContent = '✓ 문법 오류 없음';
@@ -406,7 +425,10 @@ function updatePreview() {
   if (player.alarm !== before) renderMessages();
   lastCmpVersion = -1;
 }
-editor.onCursorLine = () => (previewDirty = true);
+editor.onCursorLine = (line) => {
+  previewDirty = true;
+  if (typingLine !== null && line !== typingLine) finishTyping();
+};
 
 function updateUi(now: number, dt: number) {
   const { pos, segIndex } = player.current();
@@ -501,6 +523,7 @@ function loop(now: number) {
 // ------------------------------------------------------------ 이벤트
 
 el.start.onclick = () => {
+  finishTyping();
   player.start();
   // 다음 화면 갱신을 기다리지 않고 바로 '줄 클릭 = 그 블록부터 재생' 상태로
   editor.setReadOnly(true);

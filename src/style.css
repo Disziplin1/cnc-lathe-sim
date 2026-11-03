@@ -778,3 +778,7 @@ body.dropping::after {
   pointer-events: none;
   z-index: 1000;
 }
+.messages .typing {
+  color: var(--muted);
+  cursor: default;
+}
