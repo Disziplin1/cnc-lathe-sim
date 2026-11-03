@@ -18,6 +18,7 @@ import {
 } from './machine/tools';
 import { compareStock, parseTarget, threadRanges, type CompareResult, type Target } from './sim/compare';
 import { dxfToTarget } from './sim/dxf';
+import { parseFeatures } from './sim/features';
 import { generateProgram } from './nc/autogen';
 import { Player, STATE_LABEL } from './sim/player';
 import { fitStock, normalizeStock, protrusionOf, type StockConfig } from './sim/simulator';
@@ -203,7 +204,9 @@ function parseDrawing() {
   const r = parseTarget(dwgEditor.text);
   target = r.target;
   targetError = r.error;
-  dwgEditor.setDiagnostics(r.error ? [r.error.line] : [], []);
+  // 나사 · 널링 줄 형식이 틀리면 노란 줄 (답안 탭에서 이유를 보여 준다)
+  const feat = parseFeatures(dwgEditor.text);
+  dwgEditor.setDiagnostics(r.error ? [r.error.line] : [], feat.errors.map((e) => e.line));
   lastCmpVersion = -1;
   cmpResult = null;
 }
@@ -249,7 +252,10 @@ async function importDxf(f: File) {
     parseDrawing();
     el.cmp.checked = true;
     dxfInfo.classList.remove('err');
-    dxfInfo.textContent = `최대 Ø${r.maxDia.toFixed(1)} × 길이 ${r.length.toFixed(1)} · 직선 ${r.lines} · 원호 ${r.arcs}`;
+    dxfInfo.textContent =
+      `최대 Ø${r.maxDia.toFixed(1)} × 길이 ${r.length.toFixed(1)} · 직선 ${r.lines} · 원호 ${r.arcs}` +
+      (r.threads ? ` · 나사 ${r.threads}` : '') +
+      (r.knurls ? ` · 널링 ${r.knurls}` : '');
     // 도면이 소재보다 크면 소재를 늘린다
     const s = fitStock(settings.stock, r.maxDia, r.length);
     if (s.diameter !== settings.stock.diameter || s.length !== settings.stock.length) {
@@ -628,6 +634,7 @@ function updateUi(now: number, dt: number) {
   view2d.setFrame({
     prog,
     stock: player.sim.stock,
+    knurled: player.sim.knurled,
     stockCfg: settings.stock,
     tools: settings.tools,
     time: player.viewTime,
@@ -644,7 +651,7 @@ function updateUi(now: number, dt: number) {
     if (player.sim.version !== last3dVersion && (now - last3dTime > 120 || !running)) {
       last3dVersion = player.sim.version;
       last3dTime = now;
-      view3d.setStock(player.sim.stock);
+      view3d.setStock(player.sim.stock, player.sim.knurled);
     }
     const def = settings.tools.find((t) => t.no === seg?.tool);
     view3d.setTool(def ?? null, shape, p, def ? TOOL_COLOR[def.type] : '#cccccc');
@@ -811,7 +818,7 @@ $('btn-settings').onclick = () => {
   for (let n = 1; n <= MAX_TOOLS; n++) {
     const t = settings.tools.find((x) => x.no === n);
     const tr = document.createElement('tr');
-    const opts = (['', 'rough', 'finish', 'groove', 'thread', 'boring', 'drill'] as const)
+    const opts = (['', 'rough', 'finish', 'groove', 'thread', 'boring', 'drill', 'knurl'] as const)
       .map((k) => `<option value="${k}" ${(t?.type ?? '') === k ? 'selected' : ''}>${k ? TOOL_LABEL[k] : '— 없음 —'}</option>`)
       .join('');
     tr.innerHTML = `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td><td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td><td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>`;

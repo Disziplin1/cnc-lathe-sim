@@ -8,6 +8,8 @@ import type { CompareResult, Target } from '../sim/compare';
 export interface Frame2D {
   prog: Program;
   stock: Paths;
+  /** 널링된 Z 구간 (마름모 무늬로 그린다) */
+  knurled: [number, number][];
   stockCfg: StockConfig;
   tools: ToolDef[];
   time: number;
@@ -175,6 +177,45 @@ export class View2D {
       c.strokeStyle = '#c9d3df';
       c.lineWidth = 1;
       c.stroke();
+    }
+
+    // 널링: 소재 모양 안쪽에 빗금 두 방향 (마름모 무늬)
+    if (f.knurled.length) {
+      c.save();
+      c.beginPath();
+      for (const sgn of [1, -1])
+        for (const path of f.stock) {
+          path.forEach((q, i) => (i === 0 ? c.moveTo(X(q.X / SCALE), Y((sgn * q.Y) / SCALE)) : c.lineTo(X(q.X / SCALE), Y((sgn * q.Y) / SCALE))));
+          c.closePath();
+        }
+      c.clip('evenodd');
+      const R = f.stockCfg.diameter / 2;
+      const gap = Math.max(4, 1.2 * this.scale);
+      c.strokeStyle = 'rgba(40, 30, 0, 0.55)';
+      c.lineWidth = 1;
+      for (const [a, b] of f.knurled) {
+        const x0 = X(a);
+        const x1 = X(b);
+        const y0 = Y(R);
+        const y1 = Y(-R);
+        const h = y1 - y0;
+        c.save();
+        c.beginPath();
+        c.rect(x0, y0, x1 - x0, h);
+        c.clip();
+        c.fillStyle = 'rgba(232, 197, 71, 0.28)';
+        c.fillRect(x0, y0, x1 - x0, h);
+        c.beginPath();
+        for (let x = x0 - h; x < x1 + h; x += gap) {
+          c.moveTo(x, y0);
+          c.lineTo(x + h, y1);
+          c.moveTo(x, y1);
+          c.lineTo(x + h, y0);
+        }
+        c.stroke();
+        c.restore();
+      }
+      c.restore();
     }
 
     // 도면 비교: 남은 살(주황) / 과삭(빨강) / 도면 외곽선(노랑 점선)

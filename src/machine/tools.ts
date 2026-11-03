@@ -1,11 +1,11 @@
 import type { Vec } from '../nc/types';
 
-export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring';
+export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl';
 
 export interface ToolDef {
   no: number;
   type: ToolType;
-  /** 홈 바이트 폭 / 드릴 직경 (mm) */
+  /** 홈 바이트 폭 / 드릴 직경 / 널링 롤러 폭 (mm) */
   width: number;
   /** 인서트 노즈 반경 (mm) — 실제 공구의 모양 */
   noseR: number;
@@ -29,6 +29,7 @@ export const TOOL_LABEL: Record<ToolType, string> = {
   thread: '나사 바이트 (60°)',
   drill: '드릴',
   boring: '보링바 (내경, 55°)',
+  knurl: '널링 (롤러)',
 };
 
 export const TOOL_COLOR: Record<ToolType, string> = {
@@ -38,10 +39,11 @@ export const TOOL_COLOR: Record<ToolType, string> = {
   thread: '#c387ff',
   drill: '#ff7aa8',
   boring: '#5ee6e6',
+  knurl: '#e8c547',
 };
 
 /** 폭/직경 칸을 쓰는 공구 */
-export const USES_WIDTH: ToolType[] = ['groove', 'drill'];
+export const USES_WIDTH: ToolType[] = ['groove', 'drill', 'knurl'];
 /** 노즈 반경이 있는 공구 */
 export const USES_NOSE: ToolType[] = ['rough', 'finish', 'boring'];
 
@@ -56,6 +58,7 @@ export function defaultTools(): ToolDef[] {
     { no: 7, type: 'thread', width: 3, noseR: 0 },
     { no: 9, type: 'boring', width: 3, noseR: 0.4 },
     { no: 11, type: 'drill', width: 20, noseR: 0 },
+    { no: 12, type: 'knurl', width: 8, noseR: 0 },
   ];
 }
 
@@ -67,9 +70,12 @@ export function defaultOffsets(): ToolOffset[] {
   return list;
 }
 
-/** 저장된 예전 설정에 빠진 값 채우기 */
+/** 저장된 예전 설정에 빠진 값 채우기 (널링 공구가 생기기 전 설정이면 빈 12번에 넣어 준다) */
 export function normalizeTools(tools: Partial<ToolDef>[]): ToolDef[] {
-  return tools.map((t) => ({ no: t.no ?? 1, type: t.type ?? 'rough', width: t.width ?? 3, noseR: t.noseR ?? 0 }));
+  const out: ToolDef[] = tools.map((t) => ({ no: t.no ?? 1, type: t.type ?? 'rough', width: t.width ?? 3, noseR: t.noseR ?? 0 }));
+  if (!out.some((t) => t.type === 'knurl') && !out.some((t) => t.no === 12) && out.length < MAX_TOOLS)
+    out.push({ no: 12, type: 'knurl', width: 8, noseR: 0 });
+  return out;
 }
 
 /**
@@ -170,6 +176,16 @@ export function toolShape(t: ToolDef): Vec[] {
         { z: half, r: 12 },
         { z: -half, r: 12 },
         { z: -half, r: h },
+      ];
+    }
+    case 'knurl': {
+      // 옆에서 본 롤러 (지름 16): 기준점 = 롤러 폭 가운데 아래
+      const w = (t.width > 0 ? t.width : 8) / 2;
+      return [
+        { z: -w, r: 0 },
+        { z: w, r: 0 },
+        { z: w, r: 16 },
+        { z: -w, r: 16 },
       ];
     }
     case 'drill': {

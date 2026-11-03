@@ -159,3 +159,43 @@ describe('도면에 맞춰 소재 늘리기', () => {
     expect(fitStock(stock, 20, 10)).toEqual(stock);
   });
 });
+
+describe('DXF 나사 · 널링 글자 찾기', () => {
+  // 사용자 도면과 같은 모양: Ø15 x 60 (널링) + Ø6 x 32, 끝 15mm M6 나사 (골지름 가는 선 포함)
+  const ax = 50;
+  const half = (s: number): Ent[] => [
+    line(92, ax, 92, ax + s * 2.5),
+    line(92, ax + s * 2.5, 91.5, ax + s * 3),
+    line(91.5, ax + s * 3, 60, ax + s * 3),
+    line(60, ax + s * 3, 60, ax + s * 7.5),
+    line(60, ax + s * 7.5, 0, ax + s * 7.5),
+    line(0, ax + s * 7.5, 0, ax),
+    // 골지름 선과 나사 끝 선
+    line(91.5, ax + s * 2.5, 77, ax + s * 2.5),
+    line(77, ax + s * 2.5, 77, ax + s * 3),
+  ];
+  const ents: Ent[] = [
+    ...half(1),
+    ...half(-1),
+    line(-5, ax, 100, ax, 'CENTER'),
+    ['DIMENSION', [[8, 'DIM'], [3, 'ISO-25'], [1, 'M6'], [11, 100], [21, ax]]],
+    ['TEXT', [[8, 'TEXT'], [10, 25], [20, ax + 20], [1, 'KNURLING']]],
+    ['LEADER', [[8, 'DIM'], [10, 20], [20, ax + 5], [10, 25], [20, ax + 20]]],
+    ['HATCH', [[8, 'HATCH'], [10, 0], [20, 0], [10, 10], [20, ax + 3], [10, 30], [20, ax + 3], [10, 30], [20, ax + 7.5], [10, 10], [20, ax + 7.5]]],
+  ];
+
+  it('M6 → 보통나사 피치 1, 골지름 선 길이만큼 / 널링은 그 지름 구간 전체', () => {
+    const r = dxfToTarget(dxf(ents, [['CENTER', 'CENTER']]));
+    expect(r.threads).toBe(1);
+    expect(r.knurls).toBe(1);
+    expect(r.text).toContain('(나사 M6 Z0. ~ Z-15.)');
+    expect(r.text).toContain('(널링 Z-32. ~ Z-92.)');
+    sameProfile(r.text, 'X0. Z0.\nX5.\nX6. Z-0.5\nZ-32.\nX15.\nZ-92.\n');
+  });
+
+  it('글자가 없으면 나사 · 널링 줄도 없다', () => {
+    const r = dxfToTarget(dxf(ents.filter((e) => e[0] === 'LINE'), [['CENTER', 'CENTER']]));
+    expect(r.threads + r.knurls).toBe(0);
+    expect(r.text).not.toMatch(/나사|널링/);
+  });
+});

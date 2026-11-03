@@ -3,12 +3,13 @@ import type { Vec } from './types';
 import type { ToolDef, ToolOffset } from '../machine/tools';
 import { drawingMoves, type DrawingMove } from '../sim/compare';
 import { protrusionOf, type StockConfig } from '../sim/simulator';
+import { coarsePitch, parseFeatures } from '../sim/features';
 
 /**
  * 도면(목표 형상) → 모범 답안 프로그램.
- * 연습용이라 외경 단면 · G71 황삭 · G70 정삭(G42) 만 만든다.
+ * 연습용이라 외경 단면 · G71 황삭 · G70 정삭(G42), 도면 탭에 적힌 널링 · 나사(G76) 만 만든다.
  * 홈(안쪽으로 파인 곳)은 G71 기본형으로 깎을 수 없으므로 메워서 지나가고, 주석으로만 알려 준다.
- * 나사 · 절삭 조건 계산 · 공구 간섭 검사 · 공정 순서 · 2차 가공은 하지 않는다 (조건은 고정값).
+ * 절삭 조건 계산 · 공구 간섭 검사 · 공정 순서 · 2차 가공은 하지 않는다 (조건은 고정값).
  */
 export interface AutoProgram {
   code: string;
@@ -113,12 +114,31 @@ function envelope(moves: DrawingMove[]): { out: DrawingMove[]; grooves: AutoProg
   return { out, grooves };
 }
 
+/** 메운 외곽선에서 Z 위치의 반경 */
+function radiusAt(moves: DrawingMove[], z: number): number {
+  let best = 0;
+  for (const m of moves) {
+    const pts = points(m);
+    for (let i = 1; i < pts.length; i++) {
+      const [a, b] = [pts[i - 1], pts[i]];
+      const lo = Math.min(a.z, b.z);
+      const hi = Math.max(a.z, b.z);
+      if (z < lo - EPS || z > hi + EPS) continue;
+      const t = hi - lo < EPS ? 1 : (z - a.z) / (b.z - a.z);
+      best = Math.max(best, a.r + (b.r - a.r) * t);
+    }
+  }
+  return best;
+}
+
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
 
 export function generateProgram(input: AutoInput): AutoProgram {
   const { moves: raw, error } = drawingMoves(input.drawing);
   if (error) throw new Error(`도면 ${error.line + 1}행: ${error.message}`);
   if (!raw.length) throw new Error('도면 탭에 목표 형상이 없습니다');
+  const feat = parseFeatures(input.drawing);
+  if (feat.errors.length) throw new Error(`도면 ${feat.errors[0].line + 1}행: ${feat.errors[0].message}`);
 
   // 끝면 → 척 방향으로 맞춘다
   let moves = raw;
@@ -230,7 +250,61 @@ export function generateProgram(input: AutoInput): AutoProgram {
     `G40 G00 X${fmt(D + 50)} Z${fmt(faceZ + 50)} ;`,
     'G28 U0. W0. M09 ;',
     'M05 ;',
-    'M30 ;',
   );
+
+  const inside = (z0: number, z1: number, what: string) => {
+    if (z0 > faceZ + EPS || z1 < endZ - EPS) throw new Error(`${what} 구간 Z${fmt(z0)} ~ Z${fmt(z1)} 이 도면(Z${fmt(faceZ)} ~ Z${fmt(endZ)}) 밖에 있습니다`);
+  };
+
+  // 널링: 정삭이 끝난 지름에 롤러를 눌러 Z 방향으로 지나간다 (깎지 않음)
+  const knurlTool = input.tools.find((t) => t.type === 'knurl');
+  for (const k of feat.knurls) {
+    inside(k.z0, k.z1, '널링');
+    if (!knurlTool) {
+      code.push(`(널링 Z${fmt(k.z0)} ~ Z${fmt(k.z1)} : 설정에 널링 공구가 없어 생략)`);
+      continue;
+    }
+    const d = 2 * radiusAt(out, (k.z0 + k.z1) / 2);
+    const w = Math.min(knurlTool.width > 0 ? knurlTool.width : 8, k.z0 - k.z1) / 2;
+    code.push(
+      `(널링 Z${fmt(k.z0)} ~ Z${fmt(k.z1)} Ø${fmt(d)} : 저속으로 롤러를 눌러 무늬를 냄. 기준점 = 롤러 폭 가운데)`,
+      `${toolCode(knurlTool.no).slice(0, 3)}00 ;`,
+      'G97 S150 M03 ;',
+      `G00 X${fmt(D + 4)} Z${fmt(faceZ + 5)} ${toolCode(knurlTool.no)} M08 ;`,
+      `Z${fmt(k.z0 - w)} ;`,
+      `G01 X${fmt(d - 0.4)} F0.1 ;`,
+      `Z${fmt(k.z1 + w)} F0.2 ;`,
+      '(누른 채로 급속 후퇴하면 충돌이므로 이송으로 빼낸다)',
+      `X${fmt(d + 2)} F0.5 ;`,
+      `G00 X${fmt(D + 4)} ;`,
+      `Z${fmt(faceZ + 5)} ;`,
+      'G28 U0. W0. M09 ;',
+      'M05 ;',
+    );
+  }
+
+  // 나사: G76 (산높이 0.6134P, 첫 절입 ≈ 산높이의 38%, 정삭 2회)
+  const threadTool = input.tools.find((t) => t.type === 'thread');
+  for (const t of feat.threads) {
+    inside(t.z0, t.z1, '나사');
+    const spec = coarsePitch(t.dia) === t.pitch ? `M${t.dia}` : `M${t.dia}x${t.pitch}`;
+    if (!threadTool) {
+      code.push(`(나사 ${spec} : 설정에 나사 바이트가 없어 생략)`);
+      continue;
+    }
+    const h = Math.round(t.pitch * 0.6134 * 1000) / 1000;
+    const q = Math.max(100, Math.round((h * 0.38 * 1000) / 10) * 10);
+    code.push(
+      `(G76 나사 ${spec} : 산높이 ${fmt(h)} / 첫 절입 ${fmt(q / 1000)} / 골지름 X${fmt(t.dia - 2 * h)})`,
+      `${toolCode(threadTool.no).slice(0, 3)}00 ;`,
+      'G97 S600 M03 ;',
+      `G00 X${fmt(t.dia + 4)} Z${fmt(t.z0 + 5)} ${toolCode(threadTool.no)} M08 ;`,
+      'G76 P020060 Q50 R0.05 ;',
+      `G76 X${fmt(t.dia - 2 * h)} Z${fmt(t.z1)} P${Math.round(h * 1000)} Q${q} F${fmt(t.pitch)} ;`,
+      'G28 U0. W0. M09 ;',
+      'M05 ;',
+    );
+  }
+  code.push('M30 ;');
   return { code: code.join('\n') + '\n', grooves };
 }

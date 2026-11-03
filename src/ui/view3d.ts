@@ -49,6 +49,44 @@ function revolve(paths: Paths): THREE.BufferGeometry {
   return g;
 }
 
+/** 널링 무늬 (마름모) 텍스처: 한 칸 = 마름모 하나 */
+let knurlTex: THREE.CanvasTexture | null = null;
+function knurlTexture(): THREE.CanvasTexture {
+  if (knurlTex) return knurlTex;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 32;
+  const c = cv.getContext('2d')!;
+  c.fillStyle = '#a7b0bb';
+  c.fillRect(0, 0, 32, 32);
+  c.strokeStyle = '#4b535e';
+  c.lineWidth = 3;
+  c.beginPath();
+  c.moveTo(0, 0);
+  c.lineTo(32, 32);
+  c.moveTo(32, 0);
+  c.lineTo(0, 32);
+  c.stroke();
+  knurlTex = new THREE.CanvasTexture(cv);
+  knurlTex.wrapS = knurlTex.wrapT = THREE.RepeatWrapping;
+  knurlTex.colorSpace = THREE.SRGBColorSpace;
+  return knurlTex;
+}
+
+/** 널링 구간 [a, b] 가운데에서 소재 바깥 반경 (단면 다각형 변이 그 Z 를 지나는 곳) */
+function outerRadius(paths: Paths, a: number, b: number): number {
+  const zm = (a + b) / 2;
+  let r = 0;
+  for (const path of paths)
+    for (let i = 0; i < path.length; i++) {
+      const p = path[i];
+      const q = path[(i + 1) % path.length];
+      const [z0, z1] = [p.X / SCALE, q.X / SCALE];
+      if ((z0 - zm) * (z1 - zm) > 0 || z0 === z1) continue;
+      r = Math.max(r, (p.Y + ((q.Y - p.Y) * (zm - z0)) / (z1 - z0)) / SCALE);
+    }
+  return r;
+}
+
 const holderMat = new THREE.MeshStandardMaterial({ color: '#5b6472', metalness: 0.7, roughness: 0.4 });
 
 /** 공구 좌표(z, r, 접선 방향 깊이)로 상자 만들기 */
@@ -109,6 +147,17 @@ function buildTool(def: ToolDef, shape: Vec[], color: string): THREE.Group {
       g.add(bar);
       break;
     }
+    case 'knurl': {
+      // 롤러 (축이 Z 방향) + 롤러를 잡는 홀더
+      const w = zMax - zMin;
+      const roller = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, w, 32), new THREE.MeshStandardMaterial({ map: knurlTexture(), metalness: 0.6, roughness: 0.4 }));
+      roller.rotation.z = Math.PI / 2;
+      roller.position.set(0, 8, 0);
+      g.add(roller);
+      g.add(box(zMin - 3, zMax + 3, 8, 30, -6, 6, holderMat));
+      g.add(box(-10, 10, 30, 110, -22, 6, holderMat));
+      break;
+    }
     case 'drill': {
       // 날끝 원뿔 + 몸통을 축 둘레로 회전시킨 모양
       const rr = rMax;
@@ -138,6 +187,7 @@ export class View3D {
   private stockMesh: THREE.Mesh;
   private toolMesh: THREE.Group | null = null;
   private toolKey = '';
+  private knurlMeshes: THREE.Mesh[] = [];
   private chuck = new THREE.Group();
   private spin = 0;
   visible = false;
@@ -202,9 +252,32 @@ export class View3D {
     this.controls.update();
   }
 
-  setStock(paths: Paths) {
+  setStock(paths: Paths, knurled: [number, number][] = []) {
     this.stockMesh.geometry.dispose();
     this.stockMesh.geometry = revolve(paths);
+    // 널링 구간은 무늬를 입힌 원통을 소재 표면에 살짝 덮는다 (소재와 같이 돈다)
+    for (const m of this.knurlMeshes) {
+      this.stockMesh.remove(m);
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    this.knurlMeshes = [];
+    for (const [a, b] of knurled) {
+      const r = outerRadius(paths, a, b);
+      if (r <= 0 || b - a < 1e-3) continue;
+      const tex = knurlTexture().clone();
+      tex.needsUpdate = true;
+      // 마름모 한 칸 약 1.2mm
+      tex.repeat.set(Math.max(1, Math.round((2 * Math.PI * r) / 1.2)), Math.max(1, Math.round((b - a) / 1.2)));
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(r + 0.03, r + 0.03, b - a, RADIAL, 1, true),
+        new THREE.MeshStandardMaterial({ map: tex, metalness: 0.7, roughness: 0.35 }),
+      );
+      mesh.rotation.z = Math.PI / 2;
+      mesh.position.x = (a + b) / 2;
+      this.stockMesh.add(mesh);
+      this.knurlMeshes.push(mesh);
+    }
   }
 
   setTool(def: ToolDef | null, shape: Vec[] | null, pos: Vec | null, color: string) {

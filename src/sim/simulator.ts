@@ -1,6 +1,6 @@
 import type { Alarm, Program, Segment, Vec } from '../nc/types';
 import { toolShape, type ToolDef } from '../machine/tools';
-import { bounds, boxOverlap, difference, fromPath, hull, intersectArea, toPath, translate, type Box, type Paths } from './geometry';
+import { bounds, boxOverlap, difference, fromPath, hull, intersectArea, intersection, toPath, translate, type Box, type Paths } from './geometry';
 
 export interface StockConfig {
   /** 소재 지름 Ø */
@@ -82,10 +82,13 @@ export function posInSegment(s: Segment, local: number): Vec {
  */
 export class CutSim {
   stock: Paths = [];
+  /** 널링된 Z 구간 [작은 Z, 큰 Z] (소재는 깎지 않고 무늬만 남는다) */
+  knurled: [number, number][] = [];
   version = 0;
   time = 0;
   private stockBox!: Box;
   private shapes = new Map<number, Vec[]>();
+  private knurlTools = new Set<number>();
   private segIdx = 0;
   private edgeIdx = 1;
   private lastPt: Vec | null = null;
@@ -97,7 +100,10 @@ export class CutSim {
     private stockCfg: StockConfig,
     tools: ToolDef[],
   ) {
-    for (const t of tools) this.shapes.set(t.no, toolShape(t));
+    for (const t of tools) {
+      this.shapes.set(t.no, toolShape(t));
+      if (t.type === 'knurl') this.knurlTools.add(t.no);
+    }
     this.reset();
   }
 
@@ -114,6 +120,7 @@ export class CutSim {
       ]),
     ];
     this.updateBox();
+    this.knurled = [];
     this.segIdx = 0;
     this.edgeIdx = 1;
     this.lastPt = null;
@@ -210,8 +217,30 @@ export class CutSim {
       }
       return null;
     }
+    if (this.knurlTools.has(s.tool)) {
+      this.knurl(sweep, box);
+      return null;
+    }
     this.cut(sweep, box);
     return null;
+  }
+
+  /** 널링: 롤러가 소재를 누른 Z 구간을 기록한다 (지름 변화는 무시) */
+  private knurl(poly: Vec[], box: Box) {
+    if (!boxOverlap(box, this.stockBox)) return;
+    const hit = intersection(this.stock, [toPath(poly)]).filter((p) => p.length > 2);
+    if (!hit.length) return;
+    const b = bounds(hit.map(fromPath));
+    if (b.maxZ - b.minZ < 1e-3) return;
+    const list = [...this.knurled, [b.minZ, b.maxZ] as [number, number]].sort((x, y) => x[0] - y[0]);
+    const merged: [number, number][] = [];
+    for (const [a, c] of list) {
+      const last = merged[merged.length - 1];
+      if (last && a <= last[1] + 1e-6) last[1] = Math.max(last[1], c);
+      else merged.push([a, c]);
+    }
+    this.knurled = merged;
+    this.version++;
   }
 
   private cut(poly: Vec[], box = bounds([poly])) {

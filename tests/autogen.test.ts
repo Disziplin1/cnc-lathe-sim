@@ -23,7 +23,7 @@ function cut(drawing: string, st = stock) {
   const p = compile(gen.code, cfg);
   expect(p.alarm).toBeNull();
   const sim = new CutSim(p, st, cfg.tools);
-  sim.advanceTo(p.duration);
+  expect(sim.advanceTo(p.duration)).toBeNull();
   const target = parseTarget(drawing).target!;
   return { gen, res: compareStock(sim.stock, target, [], 0.8 * 1.6 + 0.05) };
 }
@@ -82,5 +82,29 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     expect(gen('X0. Z0.\nX60.\nZ-10.\n')).toThrow(/소재 Ø50/);
     expect(gen('X0. Z0.\nX40.\nZ-80.\n')).toThrow(/척에서 나온 길이 70/);
     expect(gen('')).toThrow(/목표 형상이 없습니다/);
+  });
+
+  it('도면 탭의 나사 · 널링 줄로 G76 과 널링을 넣는다', () => {
+    const drawing = ['X0. Z0.', 'X5.', 'X6. Z-0.5', 'Z-32.', 'X15.', 'Z-92.', '(나사 M6 Z0. ~ Z-15.)', '(널링 Z-32. ~ Z-92.)'].join('\n');
+    const st = { diameter: 20, length: 123, grip: 20, faceAllowance: 1 };
+    const gen = generateProgram({ drawing, stock: st, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('G76 X4.774 Z-15. P613 Q230 F1. ;');
+    expect(gen.code).toContain('G01 X14.6 F0.1 ;');
+    const p = compile(gen.code, cfg);
+    expect(p.alarm).toBeNull();
+    expect(p.segments.some((s) => s.kind === 'thread')).toBe(true);
+    const sim = new CutSim(p, st, cfg.tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+    expect(sim.knurled).toHaveLength(1);
+    expect(sim.knurled[0][0]).toBeCloseTo(-92, 1);
+    expect(sim.knurled[0][1]).toBeCloseTo(-32, 1);
+  });
+
+  it('나사 줄 형식이 틀리면 알려 준다', () => {
+    const gen = (drawing: string) => () => generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
+    const base = ['X0. Z0.', 'X20.', 'Z-20.'];
+    expect(gen([...base, '(나사 M7 Z0. ~ Z-10.)'].join('\n'))).toThrow(/M7x1.5 처럼/);
+    expect(gen([...base, '(나사 M20 Z0)'].join('\n'))).toThrow(/나사 줄 형식/);
+    expect(gen([...base, '(널링 Z-10. ~ Z-40.)'].join('\n'))).toThrow(/도면\(Z0. ~ Z-20.\) 밖/);
   });
 });

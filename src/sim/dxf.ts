@@ -1,8 +1,10 @@
 /**
  * DXF 도면 → 도면(목표 형상) 텍스트.
  * 선반 부품은 중심선(축) 기준으로 위아래가 같으므로, 축 위쪽 바깥 외곽선만 따라간다.
- * LINE / ARC / LWPOLYLINE / POLYLINE 만 읽고, 치수·문자·해치·중심선·숨은선은 무시한다.
+ * 외곽선은 LINE / ARC / LWPOLYLINE / POLYLINE 만 읽는다. 치수·문자·해치는 나사(M6)·널링(KNURLING) 글자를 찾을 때만 쓴다.
  */
+
+import { coarsePitch, knurlLine, threadLine } from './features';
 
 interface P {
   x: number;
@@ -20,6 +22,9 @@ export interface DxfImport {
   length: number;
   lines: number;
   arcs: number;
+  /** 글자(M6, KNURLING 등)로 찾아서 도면 끝에 적어 준 나사 · 널링 줄 수 */
+  threads: number;
+  knurls: number;
 }
 
 export interface DxfOptions {
@@ -116,6 +121,23 @@ interface Parsed {
   prims: Prim[];
   /** 중심선으로 보이는 수평선의 y */
   axis: number | null;
+  /** 나사 골지름 선을 찾기 위한 모든 직선 (숨은선 · 가는선 포함) */
+  allLines: { a: P; b: P }[];
+  /** 문자 · 치수 문자 */
+  texts: { text: string; p: P }[];
+  /** 해치 가운데 · 지시선 화살표 끝 */
+  marks: P[];
+}
+
+/** MTEXT 서식 코드 지우기 (글꼴·크기 지정, 중괄호, 줄바꿈), %%c → Ø */
+function plainText(t: string): string {
+  return t
+    .replace(/\\P/gi, ' ')
+    .replace(/\\[A-Za-z][^;\\]*;/g, '')
+    .replace(/[{}]/g, '')
+    .replace(/%%c/gi, 'Ø')
+    .replace(/%%d/gi, '°')
+    .trim();
 }
 
 function toPrims(src: string): Parsed {
@@ -123,6 +145,9 @@ function toPrims(src: string): Parsed {
   const k = inch ? 25.4 : 1;
   const prims: Prim[] = [];
   let axis: { y: number; len: number } | null = null;
+  const allLines: Parsed['allLines'] = [];
+  const texts: Parsed['texts'] = [];
+  const marks: P[] = [];
 
   const styleOf = (e: RawEntity) => {
     const layer = e.codes.find(([c]) => c === 8)?.[1] ?? '';
@@ -139,6 +164,7 @@ function toPrims(src: string): Parsed {
     if (e.type === 'LINE') {
       const a = { x: fx * num(e, 10) * k, y: num(e, 20) * k };
       const b = { x: fx * num(e, 11) * k, y: num(e, 21) * k };
+      allLines.push({ a, b });
       if (SKIP.test(style)) {
         const len = Math.abs(b.x - a.x);
         if (CENTER.test(style) && Math.abs(b.y - a.y) < EPS && (!axis || len > axis.len)) axis = { y: a.y, len };
@@ -174,9 +200,43 @@ function toPrims(src: string): Parsed {
         vs.push({ p: { x: fx * num(v, 10) * k, y: num(v, 20) * k }, bulge: fx * num(v, 42) });
       }
       pushPoly(prims, vs, closed);
+    } else if (e.type === 'TEXT' || e.type === 'MTEXT' || e.type === 'DIMENSION') {
+      // MTEXT 는 긴 글이 3 번 코드로 나뉘어 온다 (치수의 3 번은 치수 스타일 이름)
+      const codes = e.type === 'MTEXT' ? [3, 1] : [1];
+      const raw = e.codes.filter(([c]) => codes.includes(c)).map(([, v]) => v).join('');
+      const text = plainText(raw);
+      if (!text) continue;
+      // 치수는 문자 위치(11/21), 문자는 삽입점(10/20)
+      const [cx, cy] = e.type === 'DIMENSION' ? [11, 21] : [10, 20];
+      texts.push({ text, p: { x: fx * num(e, cx) * k, y: num(e, cy) * k } });
+    } else if (e.type === 'MULTILEADER') {
+      // 다중 지시선: 글자(304) 와 첫 점(대략 화살표 쪽)
+      const text = plainText(e.codes.filter(([c]) => c === 304).map(([, v]) => v).join(''));
+      const p = { x: fx * num(e, 10) * k, y: num(e, 20) * k };
+      if (text) texts.push({ text, p });
+      marks.push(p);
+    } else if (e.type === 'LEADER') {
+      // 첫 꼭짓점 = 화살표 끝
+      marks.push({ x: fx * num(e, 10) * k, y: num(e, 20) * k });
+    } else if (e.type === 'HATCH') {
+      // 첫 10/20 은 높이 기준점이라 빼고, 경계 점들의 가운데
+      const xs: number[] = [];
+      const ys: number[] = [];
+      let first = true;
+      for (const [c, v] of e.codes) {
+        if (c === 10) {
+          if (first) {
+            first = false;
+            continue;
+          }
+          xs.push(fx * parseFloat(v) * k);
+        } else if (c === 20 && xs.length > ys.length) ys.push(parseFloat(v) * k);
+      }
+      if (xs.length && ys.length)
+        marks.push({ x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 });
     }
   }
-  return { prims, axis: axis ? axis.y : null };
+  return { prims, axis: axis ? axis.y : null, allLines, texts, marks };
 }
 
 function pushPoly(prims: Prim[], vs: { p: P; bulge: number }[], closed: boolean) {
@@ -356,7 +416,21 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
   // 척 쪽 끝(가장 왼쪽)에 처음 닿은 곳까지만. 그 뒤(척 쪽 끝면, 구멍 안쪽)는 버린다
   const minX = Math.min(...path.map((e) => nodes[e.to].x));
   const cut = path.findIndex((e) => Math.abs(nodes[e.to].x - minX) < EPS);
-  const outline = path.slice(0, cut + 1);
+  // T자로 나뉜 직선(나사 끝 선 등이 닿은 곳)은 한 줄로 다시 잇는다
+  const outline: Edge[] = [];
+  for (const e of path.slice(0, cut + 1)) {
+    const last = outline[outline.length - 1];
+    if (last && last.prim.kind === 'line' && e.prim.kind === 'line') {
+      const [p, q, r] = [nodes[last.from], nodes[last.to], nodes[e.to]];
+      const cross = (q.x - p.x) * (r.y - q.y) - (q.y - p.y) * (r.x - q.x);
+      const dot = (q.x - p.x) * (r.x - q.x) + (q.y - p.y) * (r.y - q.y);
+      if (Math.abs(cross) < EPS * EPS && dot > 0) {
+        outline[outline.length - 1] = { prim: { kind: 'line', a: p, b: r }, rev: false, from: last.from, to: e.to };
+        continue;
+      }
+    }
+    outline.push(e);
+  }
 
   // 도면 좌표 → 선반 좌표 (Z = 끝면에서의 거리, X = 직경)
   const faceX = nodes[start].x;
@@ -396,5 +470,72 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
   const length = faceX - minX;
   const name = (opt.name ?? 'DXF').replace(/[()]/g, '');
   const head = `(${name} : 최대 지름 ${fmt(maxDia)} / 길이 ${fmt(length)})`;
-  return { text: [head, ...out].join('\n') + '\n', maxDia, length, lines, arcs };
+
+  // 글자로 나사 · 널링 찾기 → 도면 끝에 줄로 적는다 (틀리면 그 줄만 고치면 됨)
+  const sx = opt.faceLeft ? -1 : 1;
+  const toZ = (q: P) => sx * q.x - faceX;
+  const toR = (q: P) => Math.abs(q.y - axis);
+  // 외곽선 중 Z 방향 직선 (지름이 일정한 구간)
+  const zLines = outline
+    .filter((e) => e.prim.kind === 'line' && Math.abs(nodes[e.from].y - nodes[e.to].y) < EPS)
+    .map((e) => {
+      const [a, b] = [nodes[e.from].x - faceX, nodes[e.to].x - faceX];
+      return { z0: Math.max(a, b), z1: Math.min(a, b), r: nodes[e.from].y - axis };
+    });
+  const gapTo = (z: number, l: { z0: number; z1: number }) => (z > l.z0 ? z - l.z0 : z < l.z1 ? l.z1 - z : 0);
+  const notes: string[] = [];
+  const seen = new Set<string>();
+  let threads = 0;
+  for (const t of parsed.texts) {
+    const m = /(?:^|[^A-Z0-9])M(\d+(?:\.\d+)?)(?:\s*[xX×*]\s*(\d+(?:\.\d+)?))?/.exec(t.text);
+    if (!m) continue;
+    const dia = parseFloat(m[1]);
+    const pitch = m[2] ? parseFloat(m[2]) : coarsePitch(dia);
+    if (!pitch) continue;
+    const cands = zLines.filter((l) => Math.abs(2 * l.r - dia) <= Math.max(0.6, dia * 0.06));
+    if (!cands.length) continue;
+    const z = toZ(t.p);
+    const seg = cands.reduce((best, l) => (gapTo(z, l) < gapTo(z, best) ? l : best));
+    // 나사 길이: 구간 안의 골지름 선(가는 선)이 있으면 그 길이, 없으면 구간 전체
+    const rMinor = dia / 2 - 0.6134 * pitch;
+    let z0 = seg.z0;
+    let z1 = seg.z1;
+    const minor = parsed.allLines
+      .filter((l) => Math.abs(l.a.y - l.b.y) < EPS && Math.abs(toR(l.a) - rMinor) <= Math.max(0.5 * pitch, 0.08 * dia) && toR(l.a) < seg.r - 0.05)
+      .map((l) => ({ hi: Math.min(seg.z0, Math.max(toZ(l.a), toZ(l.b))), lo: Math.max(seg.z1, Math.min(toZ(l.a), toZ(l.b))) }))
+      .filter((l) => l.hi - l.lo > EPS);
+    if (minor.length) {
+      const best = minor.reduce((x, y) => (y.hi - y.lo > x.hi - x.lo ? y : x));
+      // 나사 끝 모따기 때문에 골지름 선이 끝면보다 조금 짧으면 끝면까지
+      z0 = seg.z0 - best.hi < 2 * pitch ? seg.z0 : best.hi;
+      z1 = best.lo;
+    }
+    // 끝면 모따기 안쪽에서 시작하면 끝면(Z0)부터
+    if (z0 < 0 && z0 > -2 * pitch) z0 = 0;
+    const line = threadLine({ dia, pitch, z0, z1 });
+    if (!seen.has(line)) {
+      seen.add(line);
+      notes.push(line);
+      threads++;
+    }
+  }
+  let knurls = 0;
+  for (const t of parsed.texts) {
+    if (!/KNURL|널링|ローレット/i.test(t.text)) continue;
+    // 글자에서 가장 가까운 해치 · 지시선 끝, 없으면 글자 위치
+    const near = parsed.marks.length
+      ? parsed.marks.reduce((best, q) => (Math.hypot(q.x - t.p.x, q.y - t.p.y) < Math.hypot(best.x - t.p.x, best.y - t.p.y) ? q : best))
+      : t.p;
+    const z = toZ(near);
+    if (!zLines.length) continue;
+    // 해치는 일부만 그리는 기호이므로 그 지름 구간 전체를 널링한다
+    const seg = zLines.reduce((best, l) => (gapTo(z, l) < gapTo(z, best) ? l : best));
+    const line = knurlLine({ z0: seg.z0, z1: seg.z1 });
+    if (!seen.has(line)) {
+      seen.add(line);
+      notes.push(line);
+      knurls++;
+    }
+  }
+  return { text: [head, ...out, ...notes].join('\n') + '\n', maxDia, length, lines, arcs, threads, knurls };
 }
