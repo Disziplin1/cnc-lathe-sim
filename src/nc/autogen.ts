@@ -61,10 +61,13 @@ function part(m: DrawingMove, a: Vec, b: Vec): DrawingMove {
   return m.kind === 'arc' ? { ...m, a, b } : { kind: 'line', a, b };
 }
 
-/** 끝면 → 척 방향으로 X 가 줄지 않고 Z 가 늘지 않는 점까지의 개수 (G71 Type I 조건) */
-function monotonicCount(pts: Vec[]): number {
+/**
+ * 끝면 → 척 방향으로 깎아 나갈 수 있는 점까지의 개수: Z 가 늘지 않고, X 는 줄지 않거나(slope 0, G71 Type I 조건)
+ * 공구가 따라 내려갈 수 있는 기울기(slope = tan 각도) 까지만 줄어든다.
+ */
+function monotonicCount(pts: Vec[], slope = 0): number {
   let k = 1;
-  while (k < pts.length && pts[k].r >= pts[k - 1].r - EPS && pts[k].z <= pts[k - 1].z + EPS) k++;
+  while (k < pts.length && pts[k].z <= pts[k - 1].z + EPS && pts[k].r >= pts[k - 1].r - slope * (pts[k - 1].z - pts[k].z) - EPS) k++;
   return k;
 }
 
@@ -81,17 +84,21 @@ function pointAtLevel(m: DrawingMove, level: number, near: Vec): Vec {
 }
 
 /**
- * G71 로 깎을 수 있게 외곽선을 고친다: 홈은 위를 직선(Z 방향)으로 메운다.
- * 원호 일부만 오목하면 원호를 거기서 자른다.
+ * 공구로 깎을 수 있게 외곽선을 고친다. 원호 일부만 안 되면 원호를 거기서 자른다.
+ * slope 0 (G71): 홈은 위를 직선(Z 방향)으로 메운다.
+ * slope > 0 (G73 · G70, 정삭 공구): 공구가 따라 내려갈 수 있는 기울기(tan)까지는 형상대로,
+ * 더 급한 곳(수직 단, 홈 벽, 급한 원호)은 그 기울기의 직선으로 내려가다 형상에 닿는 곳까지 메운다.
  */
-function envelope(moves: DrawingMove[]): { out: DrawingMove[]; grooves: AutoProgram['grooves'] } {
+function envelope(moves: DrawingMove[], slope = 0): { out: DrawingMove[]; grooves: AutoProgram['grooves']; fills: Set<DrawingMove> } {
   const out: DrawingMove[] = [];
   const grooves: AutoProgram['grooves'] = [];
+  /** 형상이 아니라 메우려고 만든 선 */
+  const fills = new Set<DrawingMove>();
   const queue = [...moves];
   while (queue.length) {
     const m = queue.shift()!;
     const pts = points(m);
-    const k = monotonicCount(pts);
+    const k = monotonicCount(pts, slope);
     if (k === pts.length) {
       out.push(m);
       continue;
@@ -100,6 +107,8 @@ function envelope(moves: DrawingMove[]): { out: DrawingMove[]; grooves: AutoProg
     const q = pts[k - 1];
     if (k > 1) out.push(part(m, m.a, q));
     const rest = [part(m, q, m.b), ...queue];
+    // 메우는 선: q 에서 척 쪽으로 기울기 slope 로 내려가는 직선 (slope 0 이면 수평)
+    const fill = (z: number) => q.r - slope * (q.z - z);
     let minR = q.r;
     let found = -1;
     let hit: Vec | null = null;
@@ -107,9 +116,24 @@ function envelope(moves: DrawingMove[]): { out: DrawingMove[]; grooves: AutoProg
       const rp = points(rest[j]);
       for (let i = 1; i < rp.length; i++) {
         minR = Math.min(minR, rp[i].r);
-        if (rp[i].r >= q.r - EPS && rp[i - 1].r < q.r - EPS && rp[i].z <= q.z + EPS) {
+        if (slope > 0 && fill(rp[i].z) < 0) break;
+        if (rp[i].r >= fill(rp[i].z) - EPS && rp[i - 1].r < fill(rp[i - 1].z) - EPS && rp[i].z <= q.z + EPS) {
           found = j;
-          hit = pointAtLevel(rest[j], q.r, rp[i]);
+          if (slope === 0) hit = pointAtLevel(rest[j], q.r, rp[i]);
+          else {
+            // 잘게 나눈 선분에서 교점을 구하고, 원호면 원 위로 맞춘다
+            const [a, b] = [rp[i - 1], rp[i]];
+            const ga = a.r - fill(a.z);
+            const gb = b.r - fill(b.z);
+            const t = Math.abs(gb - ga) < 1e-12 ? 1 : -ga / (gb - ga);
+            const p = { z: a.z + (b.z - a.z) * t, r: a.r + (b.r - a.r) * t };
+            const mm = rest[j];
+            if (mm.kind === 'arc') {
+              const R = Math.hypot(mm.a.z - mm.c.z, mm.a.r - mm.c.r);
+              const d = Math.hypot(p.z - mm.c.z, p.r - mm.c.r) || 1;
+              hit = { z: mm.c.z + ((p.z - mm.c.z) * R) / d, r: mm.c.r + ((p.r - mm.c.r) * R) / d };
+            } else hit = p;
+          }
           break;
         }
       }
@@ -118,17 +142,21 @@ function envelope(moves: DrawingMove[]): { out: DrawingMove[]; grooves: AutoProg
     if (found < 0 || !hit) {
       // 척 쪽 끝까지 다시 올라오지 않음 → 그 높이로 끝까지
       const endZ = rest[rest.length - 1].b.z;
-      out.push({ kind: 'line', a: q, b: { z: endZ, r: q.r } });
+      const f: DrawingMove = { kind: 'line', a: q, b: { z: endZ, r: q.r } };
+      out.push(f);
+      fills.add(f);
       grooves.push({ z0: q.z, z1: endZ, minDia: 2 * minR, level: q.r, toEnd: true });
       break;
     }
-    out.push({ kind: 'line', a: q, b: hit });
+    const f: DrawingMove = { kind: 'line', a: q, b: hit };
+    out.push(f);
+    fills.add(f);
     grooves.push({ z0: q.z, z1: hit.z, minDia: 2 * minR, level: q.r, toEnd: false });
     const after = rest[found];
     if (!same(hit, after.b)) queue.push(part(after, hit, after.b));
     queue.push(...rest.slice(found + 1));
   }
-  return { out, grooves };
+  return { out, grooves, fills };
 }
 
 /** 메운 외곽선에서 Z 위치의 반경 */
@@ -351,20 +379,34 @@ function grooveBlocks(grooves: Groove[], moves: DrawingMove[], side: 1 | -1, too
   const w = tool && tool.width > 0 ? tool.width : 3;
   for (const g of grooves) {
     const where = `Z${fmt(g.z0)} ~ Z${fmt(g.z1)} Ø${fmt(Math.abs(g.minDia))}`;
-    if (g.toEnd) {
-      notes.push(`(${name} ${where} : 척 쪽 끝의 모따기·단은 반대로 물려서 2차 가공)`);
-      continue;
-    }
     if (!tool) {
       notes.push(`(${name} ${where} : 설정에 ${toolName}가 없어 메워서 지나감)`);
       continue;
     }
-    // 바닥(가장 깊은 곳)이 평평한 Z 범위
-    const inside = pts.filter((q) => q.z <= g.z0 + EPS && q.z >= g.z1 - EPS);
+    // 바닥(가장 깊은 곳)이 평평한 Z 범위. 홈 경계(z0, z1)에 걸친 선분은 경계에서 잘라 그 점도 넣는다
+    const inside: Vec[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      const prev = pts[i - 1];
+      for (const zc of [g.z0, g.z1])
+        if (prev && (prev.z - zc) * (p.z - zc) < 0) {
+          const t = (zc - prev.z) / (p.z - prev.z);
+          inside.push({ z: zc, r: prev.r + (p.r - prev.r) * t });
+        }
+      if (p.z <= g.z0 + EPS && p.z >= g.z1 - EPS) inside.push(p);
+    }
     const deep = Math.min(...inside.map((q) => q.r));
     const flat = inside.filter((q) => q.r < deep + 0.005).map((q) => q.z);
     const za = Math.max(...flat);
     const zb = Math.min(...flat);
+    if (g.toEnd && (za - zb < w - 1e-6 || Math.abs(deep) < 0.5)) {
+      notes.push(`(${name} ${where} : 척 쪽 끝의 모따기·단·끊는 곳은 반대로 물려서 2차 가공)`);
+      continue;
+    }
+    if (za - zb < 0.05) {
+      notes.push(`(${name} ${where} : 바닥이 둥글거나 경사져서 공구가 못 들어가 남음)`);
+      continue;
+    }
     if (za - zb < w - 1e-6) {
       notes.push(`(${name} ${where} : 홈 폭 ${fmt(za - zb)} 이 바이트 폭 ${fmt(w)} 보다 좁아 메워서 지나감)`);
       continue;
@@ -373,7 +415,8 @@ function grooveBlocks(grooves: Groove[], moves: DrawingMove[], side: 1 | -1, too
     const q = Math.max(100, Math.floor((w * 800) / 100) * 100);
     const body = [
       `(${name} ${where} : G75 로 1mm 씩 쪼아 들어감)`,
-      `G00 ${X(start)} Z${fmt(za - w)} ;`,
+      // 외경: 소재 밖(X D+4)에서 Z 먼저 옮기고 X 로 내려간다 (앞쪽에 더 큰 지름이 있어도 안 부딪히게)
+      ...(side > 0 ? [`G00 Z${fmt(za - w)} ;`, `${X(start)} ;`] : [`G00 ${X(start)} Z${fmt(za - w)} ;`]),
       'G75 R0.5 ;',
       `G75 ${X(deep)} Z${fmt(zb)} P1000 Q${q} F0.07 ;`,
     ];
@@ -411,6 +454,16 @@ function grooveBlocks(grooves: Groove[], moves: DrawingMove[], side: 1 | -1, too
     'M05 ;',
   ];
 }
+
+/** 공구가 척 쪽으로 따라 내려갈 수 있는 경사(도): 인서트 뒤쪽(끝면 쪽) 아랫날의 각도 */
+function backAngle(t: ToolDef): number {
+  const R = Math.max(0, t.noseR);
+  const far = toolShape(t).filter((p) => p.z > 0 && Math.hypot(p.z, p.r) > 3 * R + 0.5);
+  return far.length ? Math.min(...far.map((p) => (Math.atan2(p.r, p.z) * 180) / Math.PI)) : 0;
+}
+
+/** 이동 중에 반경이 줄어드는 곳이 있는지 (척 쪽으로 내려가는 경사) */
+const descends = (m: DrawingMove) => points(m).some((p, i, a) => i > 0 && p.r < a[i - 1].r - 0.001);
 
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
 
@@ -456,16 +509,25 @@ export function generateProgram(input: AutoInput): AutoProgram {
 
   const body = contourBody(out, faceZ, 10, 20, D / 2 + 1);
 
+  // 둥근 형상(오목한 곳 · 척 쪽으로 내려가는 경사): G71 로 메운 곳을 정삭 공구가 따라 내려갈 수 있는 경사까지 G73 으로
+  const angle = Math.max(0, Math.floor(backAngle(finish)) - 2);
+  const env = angle > 0 ? envelope(profile, Math.tan((angle * Math.PI) / 180)) : { out, grooves, fills: new Set<DrawingMove>() };
+  // 도면 형상 자체에 내려가는 경사가 있을 때만 (홈으로 비스듬히 들어가는 메움 선만 있으면 G70 으로 충분)
+  const round = env.out.some((m) => !env.fills.has(m) && descends(m));
+  const finOut = round ? env.out : out;
+  const finGrooves = round ? env.grooves : grooves;
+  const depth = round ? Math.max(...finOut.flatMap(points).map((p) => radiusAt(out, p.z) - p.r)) : 0;
+
   const startX = fmt(D + 2);
   const faceStart = fmt(D + 4);
   const faceEnd = fmt(-2 * rough.noseR);
   const zc = fmt(faceZ + CLEAR_Z);
   const code: string[] = [
     'O0001 ;',
-    `(모범 답안 : 도면 형상에서 자동으로 만든 외경 단면 · G71 황삭 · G70 정삭${innerRaw.length ? ' · 드릴 · 내경 보링' : ''})`,
+    `(모범 답안 : 도면 형상에서 자동으로 만든 외경 단면 · G71 황삭${round ? ' · G73 형상 반복' : ''} · G70 정삭${innerRaw.length ? ' · 드릴 · 내경 보링' : ''})`,
     '(절삭 조건은 연습용 고정값입니다)',
   ];
-  if (grooves.length) code.push('(홈은 G71 · G70 으로는 메워서 지나가고, 정삭 뒤에 홈 바이트로 따로 깎음)');
+  if (finGrooves.length) code.push('(홈은 G71 · G70 으로는 메워서 지나가고, 정삭 뒤에 홈 바이트로 따로 깎음)');
   code.push('G28 U0. W0. ;', `G50 S2000 ${toolCode(rough.no).slice(0, 3)}00 ;`, 'G96 S150 M03 ;');
   if (s.faceAllowance > EPS) {
     code.push(`G00 X${faceStart} Z${fmt(faceZ)} ${toolCode(rough.no)} M08 ;`);
@@ -480,16 +542,34 @@ export function generateProgram(input: AutoInput): AutoProgram {
     ...body,
     'G28 U0. W0. M09 ;',
     'M05 ;',
-    `(G70 정삭 : G42 인선R보정${finR > 0 ? '' : ` - 공구 보정 ${String(finish.no).padStart(2, '0')}번에 R 과 T 를 넣어야 보정됩니다`})`,
-    `G50 S2500 ${toolCode(finish.no).slice(0, 3)}00 ;`,
-    'G96 S180 M03 ;',
-    `G42 G00 X${startX} Z${zc} ${toolCode(finish.no)} M08 ;`,
-    'G70 P10 Q20 ;',
-    `G40 G00 X${fmt(D + 50)} Z${fmt(faceZ + 50)} ;`,
-    'G28 U0. W0. M09 ;',
-    'M05 ;',
   );
-  code.push(...grooveBlocks(grooves, profile, 1, input.tools.find((t) => t.type === 'groove'), faceZ, D));
+  const compNote = finR > 0 ? '' : ` - 공구 보정 ${String(finish.no).padStart(2, '0')}번에 R 과 T 를 넣어야 보정됩니다`;
+  if (!round)
+    code.push(
+      `(G70 정삭 : G42 인선R보정${compNote})`,
+      `G50 S2500 ${toolCode(finish.no).slice(0, 3)}00 ;`,
+      'G96 S180 M03 ;',
+      `G42 G00 X${startX} Z${zc} ${toolCode(finish.no)} M08 ;`,
+      'G70 P10 Q20 ;',
+    );
+  else {
+    const n = Math.max(1, Math.ceil(depth / 1.0));
+    code.push(
+      `(G73 형상 반복 : G71 이 메워 둔 오목한 곳 · 내려가는 경사를 정삭 공구로. 이 공구는 ${angle}° 경사까지 내려갈 수 있음)`,
+      `(남은 깊이 ${fmt(depth)} 을 ${n}번에 나눠 형상을 따라 깎음. G73 은 인선R보정 없이 돌아서 경사에서 노즈가 더 먹으므로 정삭 여유를 X0.8 Z0.2 로)`,
+      `G50 S2500 ${toolCode(finish.no).slice(0, 3)}00 ;`,
+      'G96 S180 M03 ;',
+      `G00 X${startX} Z${zc} ${toolCode(finish.no)} M08 ;`,
+      `G73 U${fmt(depth)} W0. R${n} ;`,
+      'G73 P50 Q60 U0.8 W0.2 F0.15 ;',
+      ...contourBody(finOut, faceZ, 50, 60, D / 2 + 1),
+      `(G70 정삭 : G42 인선R보정${compNote})`,
+      `G42 G00 X${startX} Z${zc} ;`,
+      'G70 P50 Q60 ;',
+    );
+  }
+  code.push(`G40 G00 X${fmt(D + 50)} Z${fmt(faceZ + 50)} ;`, 'G28 U0. W0. M09 ;', 'M05 ;');
+  code.push(...grooveBlocks(finGrooves, profile, 1, input.tools.find((t) => t.type === 'groove'), faceZ, D));
   if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input));
 
   const inside = (z0: number, z1: number, what: string) => {

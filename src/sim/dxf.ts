@@ -25,6 +25,8 @@ export interface DxfImport {
   /** 글자(M6, KNURLING 등)로 찾아서 도면 끝에 적어 준 나사 · 널링 줄 수 */
   threads: number;
   knurls: number;
+  /** 척 쪽 끝이 뾰족해서(축까지 내려와서) 끝면 방향을 반대로 바꿨음 */
+  flipped: boolean;
 }
 
 export interface DxfOptions {
@@ -371,7 +373,24 @@ function rightTurn(inc: P, out: P): number {
   return -Math.atan2(cross, dot);
 }
 
+/**
+ * DXF → 도면 텍스트. 고른 방향으로 읽었는데 척 쪽 끝이 축까지 내려와 뾰족하면(물 수 없음)
+ * 반대 방향이 물 수 있는 모양일 때 끝면 방향을 바꿔서 돌려준다.
+ */
 export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
+  const r = convert(src, opt);
+  if (r.chuckR < 0.5) {
+    try {
+      const other = convert(src, { ...opt, faceLeft: !opt.faceLeft });
+      if (other.chuckR >= 0.5) return { ...other.result, flipped: true };
+    } catch {
+      // 반대 방향으로 못 읽으면 고른 방향 그대로
+    }
+  }
+  return { ...r.result, flipped: false };
+}
+
+function convert(src: string, opt: DxfOptions): { result: Omit<DxfImport, 'flipped'>; chuckR: number } {
   const parsed = toPrims(src);
   if (!parsed.prims.length) throw new Error('외곽선(LINE / ARC / POLYLINE)을 찾지 못했습니다. 블록으로 묶인 도면이면 분해(EXPLODE) 후 저장해 주세요.');
   const axis = findAxis(parsed.prims, parsed.axis);
@@ -642,5 +661,6 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
       }
     }
   }
-  return { text: [head, ...out, ...notes].join('\n') + '\n', maxDia, length, lines, arcs, threads, knurls };
+  const chuckR = outline.length ? nodes[outline[outline.length - 1].to].y - axis : 0;
+  return { result: { text: [head, ...out, ...notes].join('\n') + '\n', maxDia, length, lines, arcs, threads, knurls }, chuckR };
 }

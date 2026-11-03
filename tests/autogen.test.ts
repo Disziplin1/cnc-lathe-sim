@@ -49,7 +49,7 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     expect(gen.grooves[0].z1).toBeCloseTo(-22, 3);
     expect(gen.grooves[0].minDia).toBeCloseTo(16, 3);
     expect(gen.code).toContain('(홈 Z-18. ~ Z-22. Ø16. : G75 로 1mm 씩 쪼아 들어감)');
-    expect(gen.code).toContain('G00 X22. Z-21. ;');
+    expect(gen.code).toContain('G00 Z-21. ;\nX22. ;');
     expect(gen.code).toContain('G75 X16. Z-22. P1000 Q2400 F0.07 ;');
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.02);
@@ -225,5 +225,32 @@ describe('모범 답안: 홈 모따기 · 널링 묶기', () => {
     const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
     expect(gen.code.match(/T1200 ;/g)).toHaveLength(1);
     expect(gen.code.indexOf('(널링 Z0. ~ Z-20.')).toBeLessThan(gen.code.indexOf('(널링 Z-20. ~ Z-50.'));
+  });
+});
+
+describe('모범 답안: 둥근 형상 (G73)', () => {
+  // 공 손잡이: 끝면에 공(R18.631), 오목한 목(R49.864), Ø13, 척 쪽 Ø8 (사용자 도면)
+  const drawing = ['X0. Z0.', 'G03 X17.659 Z-27.218 R18.631', 'G02 X13. Z-59.85 R49.864', 'G01 Z-67.85', 'X8.', 'Z-79.6', 'X6.75 Z-80.85'].join('\n');
+  const st = { diameter: 30, length: 107, grip: 15, faceAllowance: 1 };
+
+  it('G71 로 메운 뒤 G73 · G70 으로 공 뒤쪽과 오목한 목을 따라 깎고, Ø8 단은 홈 바이트로', () => {
+    const gen = generateProgram({ drawing, stock: st, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('G73 P50 Q60 U0.8 W0.2 F0.15 ;');
+    expect(gen.code).toContain('G02 X13. Z-59.85 R49.864 ;');
+    expect(gen.code).toContain('G70 P50 Q60 ;');
+    expect(gen.code).toContain('G75 X8. Z-72.552');
+    const p = compile(gen.code, cfg);
+    expect(p.alarm).toBeNull();
+    const sim = new CutSim(p, st, cfg.tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+    const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.05);
+  });
+
+  it('단순한 축은 G73 없이 G70', () => {
+    const gen = generateProgram({ drawing: SAMPLES.find((s) => s.id === 'multi')!.target!, stock, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).not.toContain('G73');
+    expect(gen.code).toContain('G70 P10 Q20 ;');
   });
 });

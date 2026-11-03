@@ -249,7 +249,9 @@ window.addEventListener('drop', (e) => {
 
 async function importDxf(f: File) {
   try {
-    const r = dxfToTarget(await f.text(), { faceLeft: $<HTMLInputElement>('chk-dxf-left').checked, name: f.name });
+    const left = $<HTMLInputElement>('chk-dxf-left');
+    const r = dxfToTarget(await f.text(), { faceLeft: left.checked, name: f.name });
+    if (r.flipped) left.checked = !left.checked;
     dwgEditor.text = r.text;
     parseDrawing();
     el.cmp.checked = true;
@@ -257,7 +259,8 @@ async function importDxf(f: File) {
     dxfInfo.textContent =
       `최대 Ø${r.maxDia.toFixed(1)} × 길이 ${r.length.toFixed(1)} · 직선 ${r.lines} · 원호 ${r.arcs}` +
       (r.threads ? ` · 나사 ${r.threads}` : '') +
-      (r.knurls ? ` · 널링 ${r.knurls}` : '');
+      (r.knurls ? ` · 널링 ${r.knurls}` : '') +
+      (r.flipped ? ` · 척 쪽 끝이 뾰족해서 끝면을 ${left.checked ? '왼쪽' : '오른쪽'}으로 바꿈` : '');
     // 도면이 소재보다 크면 소재를 늘린다
     const s = fitStock(settings.stock, r.maxDia, r.length);
     if (s.diameter !== settings.stock.diameter || s.length !== settings.stock.length) {
@@ -354,15 +357,16 @@ function makeAnswer(force: boolean) {
     const r = generateProgram(input);
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');
-    const parts = ['외경 G71 / G70', ...(r.bore ? ['드릴 · 내경 보링'] : []), ...(r.grooves.length ? ['홈 G75'] : [])];
+    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? ['드릴 · 내경 보링'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : [])];
     ansInfo.textContent = parts.join(' · ') + ' · 절삭 조건은 고정값';
-    if (force) {
-      // 눌렀는데 아무 변화가 없어 보이지 않게: 언제 만들었는지와 바뀐 줄 수를 보여 준다
+    // 언제 만들었는지와 바뀐 줄 수를 보여 준다 (탭을 열 때 도면이 바뀌어 저절로 다시 만든 경우도)
+    if (force || before) {
       const old = new Set(before.split('\n'));
       const changed = r.code.split('\n').filter((l) => !old.has(l)).length;
       const now = new Date();
       const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
-      ansInfo.textContent = `✓ ${time} 다시 만듦 · ${before === r.code ? '도면·설정이 같아서 이전과 같은 답안' : `바뀐 줄 ${changed}개`}`;
+      const what = force ? '다시 만듦' : '도면·설정이 바뀌어 새로 만듦';
+      ansInfo.textContent = `✓ ${time} ${what} · ${before === r.code ? '이전과 같은 답안' : `바뀐 줄 ${changed}개`} · ${parts.join(' · ')}`;
       const box = $('editor-ans');
       box.classList.remove('flash');
       void box.offsetWidth;
