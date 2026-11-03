@@ -239,6 +239,53 @@ async function importDxf(f: File) {
   }
 };
 
+// 코드 창 | 시뮬레이션 창 경계 끌기
+const SPLIT_KEY = 'cnc-sim-split';
+const layout = document.querySelector<HTMLElement>('.layout')!;
+const splitter = $('splitter');
+function setLeftWidth(px: number | null) {
+  if (px === null) layout.style.removeProperty('--left-w');
+  else {
+    const max = layout.clientWidth - 360;
+    layout.style.setProperty('--left-w', `${Math.round(Math.max(260, Math.min(max, px)))}px`);
+  }
+}
+try {
+  const w = parseFloat(localStorage.getItem(SPLIT_KEY) ?? '');
+  if (w > 0) setLeftWidth(w);
+} catch {
+  // 저장소를 못 쓰면 기본 크기
+}
+splitter.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  splitter.setPointerCapture(e.pointerId);
+  splitter.classList.add('dragging');
+  document.body.classList.add('resizing');
+  const left = layout.getBoundingClientRect().left;
+  const move = (ev: PointerEvent) => setLeftWidth(ev.clientX - left);
+  const up = () => {
+    splitter.removeEventListener('pointermove', move);
+    splitter.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+    try {
+      localStorage.setItem(SPLIT_KEY, String(layout.querySelector('.left')!.getBoundingClientRect().width));
+    } catch {
+      // 저장 못 해도 이번에는 적용됨
+    }
+  };
+  splitter.addEventListener('pointermove', move);
+  splitter.addEventListener('pointerup', up, { once: true });
+  splitter.addEventListener('pointercancel', up, { once: true });
+});
+splitter.addEventListener('dblclick', () => {
+  setLeftWidth(null);
+  try {
+    localStorage.removeItem(SPLIT_KEY);
+  } catch {
+    // 무시
+  }
+});
+
 // 왼쪽 탭: 프로그램 / 도면 / 코드 사전
 type Pane = 'prog' | 'dwg' | 'book';
 function showPane(pane: Pane) {

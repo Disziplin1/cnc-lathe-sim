@@ -94,7 +94,23 @@ button.primary:hover:not(:disabled) {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(320px, 36%) 1fr;
+  grid-template-columns: var(--left-w, minmax(320px, 36%)) 6px 1fr;
+}
+/* 코드 창 | 시뮬레이션 창 경계: 끌어서 크기 조절 */
+.splitter {
+  cursor: col-resize;
+  background: var(--panel-2);
+  border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  touch-action: none;
+}
+.splitter:hover,
+.splitter.dragging {
+  background: var(--accent);
+}
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .left {
@@ -360,6 +376,9 @@ table.tools input {
   }
   .right {
     min-height: 80vh;
+  }
+  .splitter {
+    display: none;
   }
   .status {
     grid-template-columns: 1fr;
