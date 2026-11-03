@@ -238,7 +238,7 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): stri
     ];
   }
 
-  if (dr > wall - 0.3) {
+  if (dr > wall + 0.005) {
     const fit = Math.floor(2 * wall - 2);
     throw new Error(`드릴 Ø${fmt(drill.width)} 이 구멍 Ø${fmt(2 * wall)} 보다 너무 큽니다. 설정에서 ${tName} 드릴 지름을 Ø${fit} 이하로 바꿔 주세요`);
   }

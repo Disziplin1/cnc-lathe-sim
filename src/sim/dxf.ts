@@ -461,8 +461,12 @@ export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
     let dir: P = { x: 0, y: -1 };
     const walk: Edge[] = [];
     for (let guard = 0; guard < prims.length + 1; guard++) {
-      const outs = (adj.get(at) ?? []).filter((e) => !iused.has(e.prim));
+      let outs = (adj.get(at) ?? []).filter((e) => !iused.has(e.prim));
       if (!outs.length) break;
+      // 숨은선 도면에서는 구멍 단차·모따기 모서리가 축을 가로지르는 세로선으로 보인다.
+      // 축으로 내려가는 선은 다른 길이 없을 때(막힌 구멍 바닥)만 탄다
+      const offAxis = outs.filter((e) => Math.abs(nodes[e.to].y - axis) >= EPS);
+      if (offAxis.length) outs = offAxis;
       // 왼쪽으로 가장 많이 꺾는 길 (되돌아가는 길은 가장 나중)
       const left = (e: Edge) => {
         const t = rightTurn(dir, startDir(e));

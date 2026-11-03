@@ -268,3 +268,22 @@ describe('DXF 암나사 찾기', () => {
     expect(r.text).toContain('(나사 M20x1.5 Z0. ~ Z-15. 내경)');
   });
 });
+
+describe('DXF 숨은선 단차 구멍', () => {
+  it('단차·모따기 모서리가 축을 가로지르는 세로선이어도 구멍 벽을 따라간다', () => {
+    const ax = 50;
+    const H = 'HID';
+    const hid = (x1: number, y1: number, x2: number, y2: number) => line(x1, y1, x2, y2, H);
+    // Ø60 x 40 (끝면 x=40), 구멍: 입구 C1 → Ø30 깊이 10 → Ø20 관통. 단차 모서리 세로선이 축을 가로지름
+    const ents: Ent[] = [
+      ...chain([[40, ax - 30], [40, ax + 30], [0, ax + 30], [0, ax - 30], [40, ax - 30]] as [number, number][]),
+      ...[1, -1].flatMap((s) => [hid(40, ax + s * 16, 39, ax + s * 15), hid(39, ax + s * 15, 30, ax + s * 15), hid(30, ax + s * 10, 0, ax + s * 10)]),
+      hid(39, ax - 15, 39, ax + 15),
+      hid(30, ax - 15, 30, ax + 15),
+      line(-5, ax, 45, ax, 'CENTER'),
+    ];
+    const r = dxfToTarget(dxf(ents, [['CENTER', 'CENTER'], [H, 'HIDDEN']]));
+    const inner = r.text.split('(내경)')[1].trim().split('\n');
+    expect(inner).toEqual(['X32. Z0.', 'G01 X30. Z-1.', 'G01 X30. Z-10.', 'G01 X20. Z-10.', 'G01 X20. Z-40.']);
+  });
+});
