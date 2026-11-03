@@ -80,6 +80,10 @@ export function lex(src: string, mode: DecimalMode, warnings: Alarm[]): Block[] 
         }
         const raw = m[1].replace(',', '.');
         i += 1 + m[0].length;
+        if (text[i] === '.' || text[i] === ',') {
+          fail(`'${c}${m[1]}${text[i]}' : 소수점이 두 번 있습니다. ${c}${raw} 처럼 한 번만 씁니다`);
+          break;
+        }
         if (m[1].includes(',') && !commaWarned) {
           commaWarned = true;
           warnings.push({ code: 'W002', line: ln, level: 'warning', message: `'${c}${m[1]}' 쉼표(,) → 소수점(.)으로 읽었습니다. 실제 기계에서는 알람이 납니다` });

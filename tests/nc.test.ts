@@ -34,6 +34,12 @@ describe('interpreter', () => {
     expect(p.warnings.some((w) => w.code === 'W002')).toBe(true);
   });
 
+  it('소수점이 두 번이면 알기 쉬운 알람', () => {
+    const p = compile(head + 'G00 X40. Z2. ;\nG01 Z-9.5. F0.2 ;\n', cfg());
+    expect(p.alarm?.message).toContain('소수점이 두 번');
+    expect(p.alarm?.message).toContain('Z-9.5 처럼');
+  });
+
   it('X 는 직경, U/W 는 증분', () => {
     const p = compile(head + 'G00 X40. Z2. ;\nG01 U-4. W-10. F0.2 ;\n', cfg());
     expect(p.alarm).toBeNull();

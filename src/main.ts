@@ -183,10 +183,37 @@ function parseDrawing() {
 const dxfFile = $<HTMLInputElement>('file-dxf');
 const dxfInfo = $('dxf-info');
 $('btn-dxf').onclick = () => dxfFile.click();
-dxfFile.onchange = async () => {
+dxfFile.onchange = () => {
   const f = dxfFile.files?.[0];
   dxfFile.value = '';
-  if (!f) return;
+  if (f) importDxf(f);
+};
+
+// 화면 어디에든 DXF 파일을 끌어다 놓으면 불러온다
+const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+window.addEventListener('dragover', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  document.body.classList.add('dropping');
+});
+window.addEventListener('dragleave', (e) => {
+  if (!e.relatedTarget) document.body.classList.remove('dropping');
+});
+window.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  document.body.classList.remove('dropping');
+  const files = [...(e.dataTransfer?.files ?? [])];
+  const f = files.find((x) => /\.dxf$/i.test(x.name));
+  showPane('dwg');
+  if (f) importDxf(f);
+  else {
+    dxfInfo.classList.add('err');
+    dxfInfo.textContent = `DXF 파일만 넣을 수 있습니다 (${files[0]?.name ?? ''})`;
+  }
+});
+
+async function importDxf(f: File) {
   try {
     const r = dxfToTarget(await f.text(), { faceLeft: $<HTMLInputElement>('chk-dxf-left').checked, name: f.name });
     dwgEditor.text = r.text;

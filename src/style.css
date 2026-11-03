@@ -763,3 +763,18 @@ button.step {
 .dwg-bar .err {
   color: #ff5d5d;
 }
+body.dropping::after {
+  content: 'DXF 파일을 놓으면 도면으로 불러옵니다';
+  position: fixed;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: rgba(15, 21, 29, 0.85);
+  color: var(--accent);
+  font-size: 20px;
+  pointer-events: none;
+  z-index: 1000;
+}
