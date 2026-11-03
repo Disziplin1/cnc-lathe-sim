@@ -829,3 +829,17 @@ body.dropping::after {
   color: var(--muted);
   cursor: default;
 }
+/* 모범 답안 "다시 만들기" 를 눌렀을 때 잠깐 반짝 */
+.editor.flash {
+  animation: ans-flash 0.7s ease-out;
+}
+@keyframes ans-flash {
+  from {
+    box-shadow: inset 0 0 0 2px var(--accent);
+    filter: brightness(1.35);
+  }
+  to {
+    box-shadow: inset 0 0 0 2px transparent;
+    filter: none;
+  }
+}

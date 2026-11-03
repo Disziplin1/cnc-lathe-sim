@@ -349,13 +349,25 @@ function makeAnswer(force: boolean) {
   if (!force && key === answerKey) return;
   answerKey = key;
   scores.ans = null;
+  const before = ansEditor.text;
   try {
     const r = generateProgram(input);
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');
-    ansInfo.textContent = r.grooves.length
-      ? `${r.bore ? '외경 · 내경' : '외경'} G71 / G70 · 홈 ${r.grooves.length}곳은 메워서 지나감 (주석 참고)`
-      : `${r.bore ? '외경 + 드릴 · 내경 보링' : '외경'} G71 황삭 / G70 정삭 · 절삭 조건은 고정값`;
+    const parts = ['외경 G71 / G70', ...(r.bore ? ['드릴 · 내경 보링'] : []), ...(r.grooves.length ? ['홈 G75'] : [])];
+    ansInfo.textContent = parts.join(' · ') + ' · 절삭 조건은 고정값';
+    if (force) {
+      // 눌렀는데 아무 변화가 없어 보이지 않게: 언제 만들었는지와 바뀐 줄 수를 보여 준다
+      const old = new Set(before.split('\n'));
+      const changed = r.code.split('\n').filter((l) => !old.has(l)).length;
+      const now = new Date();
+      const time = [now.getHours(), now.getMinutes(), now.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':');
+      ansInfo.textContent = `✓ ${time} 다시 만듦 · ${before === r.code ? '도면·설정이 같아서 이전과 같은 답안' : `바뀐 줄 ${changed}개`}`;
+      const box = $('editor-ans');
+      box.classList.remove('flash');
+      void box.offsetWidth;
+      box.classList.add('flash');
+    }
   } catch (e) {
     ansEditor.text = '';
     ansInfo.classList.add('err');
