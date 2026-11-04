@@ -17,6 +17,16 @@ export interface AutoProgram {
   grooves: Groove[];
   /** 내경(드릴 · 보링)도 넣었는지 */
   bore: boolean;
+  /** 답안에 맞게 바꾼 공구 (설정에도 반영해야 시뮬레이션 공구 모양이 맞음) */
+  adjust: ToolAdjust[];
+}
+
+export interface ToolAdjust {
+  no: number;
+  /** 바꾸기 전 폭 / 지름 */
+  from: number;
+  to: number;
+  why: string;
 }
 
 /**
@@ -243,8 +253,8 @@ function faceFirst(moves: DrawingMove[]): DrawingMove[] {
  * 내경: 드릴(G74) → 보링 황삭(G71, 정삭 여유 U 마이너스) → 보링 정삭(G70 + G41).
  * 보링은 드릴 구멍보다 0.5mm 안쪽(반경)에서 시작하고, 그보다 작은 곳(막힌 구멍 바닥 가운데의 드릴 끝 모양)은 남는다.
  */
-function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): string[] {
-  const drill = input.tools.find((t) => t.type === 'drill');
+function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjust: ToolAdjust[]): string[] {
+  let drill = input.tools.find((t) => t.type === 'drill');
   const bar = input.tools.find((t) => t.type === 'boring');
   if (!drill) throw new Error('도면에 구멍(내경)이 있는데 설정에 드릴이 없습니다');
   if (!bar) throw new Error('도면에 구멍(내경)이 있는데 설정에 보링바가 없습니다');
@@ -254,14 +264,39 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): stri
   const out = env.out.map(flipR);
   const pts = out.flatMap(points);
   const wall = Math.min(...pts.filter((p) => p.r > EPS).map((p) => p.r));
-  const dr = drill.width / 2;
   if (!(wall > 0)) throw new Error('내경 윤곽에 구멍 지름이 없습니다');
   const tName = toolCode(drill.no).slice(0, 3);
-  const tipLen = dr / Math.tan((59 * Math.PI) / 180);
 
   // 드릴 지름 = 구멍 지름인 곧은 구멍(입구 모따기는 있어도 됨)은 드릴로만 뚫는다
   const body = inner[0].kind === 'line' && inner[0].a.r > inner[0].b.r + EPS && Math.abs(inner[0].b.r - wall) < 0.01 ? inner.slice(1) : inner;
   const straight = body.every((m) => points(m).every((p) => p.r <= wall + 0.01));
+  // 보링바가 드릴 구멍에 들어가려면: 인서트가 축 건너편으로 넘어간 만큼이 드릴 구멍 반경보다 작아야 한다
+  // (시작 위치: 공구 끝 반경 = 드릴 반경 - 0.5, 0.2 여유). 보링 여유를 반경 1mm 남기는 가장 큰 드릴까지
+  const reach = -Math.min(...toolShape(bar).map((p) => p.r));
+  const minDrill = Math.ceil(0.5 + reach + 0.2);
+  const maxDrill = Math.floor(2 * wall - 2);
+  const drillOnly = straight && Math.abs(drill.width - 2 * wall) <= 0.05;
+  const boreOk = drill.width >= minDrill && drill.width / 2 <= wall + 0.005;
+  if (!drillOnly && !boreOk) {
+    // 설정의 드릴로는 안 되면 맞는 지름으로 바꾼다: 보링바가 들어가면 가장 큰 드릴 + 보링, 안 들어가는 곧은 구멍은 구멍 지름 드릴로만
+    let to: number;
+    let why: string;
+    if (minDrill <= maxDrill) {
+      to = maxDrill;
+      why = drill.width < minDrill ? `보링바(${toolCode(bar.no).slice(0, 3)})가 들어가려면 드릴 구멍이 Ø${minDrill} 이상이어야 해서` : `구멍 Ø${fmt(2 * wall)} 보다 커서`;
+    } else if (straight) {
+      to = Math.round(2 * wall * 1000) / 1000;
+      why = `구멍 Ø${fmt(2 * wall)} 은 보링바가 들어가기에 작아서 드릴로만 뚫으려고`;
+    } else
+      throw new Error(
+        `구멍 Ø${fmt(2 * wall)} 은 보링바(${toolCode(bar.no).slice(0, 3)})가 들어가기에 너무 작고(드릴 구멍이 Ø${minDrill} 이상이어야 함), 단이 있어서 드릴 하나로도 못 뚫습니다`,
+      );
+    adjust.push({ no: drill.no, from: drill.width, to, why });
+    drill = { ...drill, width: to };
+  }
+  const dr = drill.width / 2;
+  const tipLen = dr / Math.tan((59 * Math.PI) / 180);
+
   if (straight && Math.abs(drill.width - 2 * wall) <= 0.05) {
     // 막힌 구멍은 드릴 몸통(지름 전체)이 바닥까지 가게 → 끝 원뿔은 바닥보다 더 들어간다
     const bottom = pts.find((p) => p.r < wall - 0.01);
@@ -281,27 +316,6 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput): stri
     ];
   }
 
-  if (dr > wall + 0.005) {
-    const fit = Math.floor(2 * wall - 2);
-    throw new Error(`드릴 Ø${fmt(drill.width)} 이 구멍 Ø${fmt(2 * wall)} 보다 너무 큽니다. 설정에서 ${tName} 드릴 지름을 Ø${fit} 이하로 바꿔 주세요`);
-  }
-  // 보링바가 드릴 구멍에 들어가려면: 인서트가 축 건너편으로 넘어간 만큼이 드릴 구멍 반경보다 작아야 한다
-  // (시작 위치: 공구 끝 반경 = 드릴 반경 - 0.5, 0.2 여유)
-  const reach = -Math.min(...toolShape(bar).map((p) => p.r));
-  const minDrill = Math.ceil(0.5 + reach + 0.2);
-  if (drill.width < minDrill) {
-    const maxDrill = Math.floor(2 * wall - 2);
-    const same = `${tName} 드릴을 구멍과 같은 Ø${fmt(2 * wall)} 로 바꾸면 드릴로만 뚫습니다`;
-    if (minDrill > maxDrill)
-      throw new Error(
-        `구멍 Ø${fmt(2 * wall)} 은 보링바(${toolCode(bar.no).slice(0, 3)})가 들어가기에 너무 작습니다 (드릴 구멍이 Ø${minDrill} 이상이어야 함).` +
-          (straight ? ` 설정에서 ${same}` : ''),
-      );
-    throw new Error(
-      `드릴 Ø${fmt(drill.width)} 구멍에는 보링바가 들어가지 못합니다. 설정에서 ${tName} 드릴 지름을 Ø${minDrill} ~ Ø${maxDrill} 로 바꿔 주세요` +
-        (straight ? ` (또는 ${same})` : ''),
-    );
-  }
   const rStop = dr - 0.5;
 
   // 보링 형상: 반경이 rStop 까지 내려가는 곳에서 자른다
@@ -570,7 +584,8 @@ export function generateProgram(input: AutoInput): AutoProgram {
   }
   code.push(`G40 G00 X${fmt(D + 50)} Z${fmt(faceZ + 50)} ;`, 'G28 U0. W0. M09 ;', 'M05 ;');
   code.push(...grooveBlocks(finGrooves, profile, 1, input.tools.find((t) => t.type === 'groove'), faceZ, D));
-  if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input));
+  const adjust: ToolAdjust[] = [];
+  if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input, adjust));
 
   const inside = (z0: number, z1: number, what: string) => {
     if (z0 > faceZ + EPS || z1 < endZ - EPS) throw new Error(`${what} 구간 Z${fmt(z0)} ~ Z${fmt(z1)} 이 도면(Z${fmt(faceZ)} ~ Z${fmt(endZ)}) 밖에 있습니다`);
@@ -645,5 +660,5 @@ export function generateProgram(input: AutoInput): AutoProgram {
     );
   }
   code.push('M30 ;');
-  return { code: code.join('\n') + '\n', grooves, bore: innerRaw.length > 0 };
+  return { code: code.join('\n') + '\n', grooves, bore: innerRaw.length > 0, adjust };
 }

@@ -365,9 +365,19 @@ function makeAnswer(force: boolean) {
   const before = ansEditor.text;
   try {
     const r = generateProgram(input);
+    // 답안이 공구를 바꿨으면(예: 구멍에 맞는 드릴 지름) 설정에도 반영해서 시뮬레이션 공구 모양을 맞춘다
+    for (const a of r.adjust) {
+      const t = settings.tools.find((x) => x.no === a.no);
+      if (t) t.width = a.to;
+    }
+    if (r.adjust.length) {
+      answerKey = JSON.stringify(input);
+      save();
+      if (active !== ansEditor) rebuild();
+    }
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');
-    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? ['드릴 · 내경 보링'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : [])];
+    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? [r.code.includes('G71 P30') ? '드릴 · 내경 보링' : '드릴'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : [])];
     ansInfo.textContent = parts.join(' · ') + ' · 절삭 조건은 고정값';
     // 언제 만들었는지와 바뀐 줄 수를 보여 준다 (탭을 열 때 도면이 바뀌어 저절로 다시 만든 경우도)
     if (force || before) {
@@ -382,6 +392,13 @@ function makeAnswer(force: boolean) {
       void box.offsetWidth;
       box.classList.add('flash');
     }
+    if (r.adjust.length)
+      ansInfo.textContent =
+        r.adjust
+          .map((a) => `🔧 T${String(a.no).padStart(2, '0')} 드릴을 Ø${+a.from.toFixed(3)} → Ø${+a.to.toFixed(3)} 로 바꿈 (${a.why})`)
+          .join(' · ') +
+        ' · ' +
+        ansInfo.textContent;
   } catch (e) {
     ansEditor.text = '';
     ansInfo.classList.add('err');

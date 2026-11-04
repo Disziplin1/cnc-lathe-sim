@@ -152,15 +152,27 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(sim.advanceTo(p.duration)).toBeNull();
   });
 
-  it('보링바가 들어가지 못하면 실행하기 전에 알려 준다', () => {
-    const gen = (hole: number, drill: number) => () =>
+  it('설정의 드릴이 구멍에 안 맞으면 알맞은 지름으로 바꾸고 알려 준다', () => {
+    const gen = (hole: number, drill: number) =>
       generateProgram({ drawing: ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', `X${hole}. Z0.`, 'Z-10.', 'X0.'].join('\n'), stock, tools: withDrill(drill), offsets: cfg.offsets });
-    // 드릴 구멍이 작아서 보링바가 못 들어감 → 들어갈 수 있는 드릴 범위
-    expect(gen(30, 12)).toThrow(/Ø16 ~ Ø28 로 바꿔/);
+    // 드릴 구멍이 작아서 보링바가 못 들어감 → 보링바가 들어가는 가장 큰 드릴
+    let r = gen(30, 12);
+    expect(r.adjust).toEqual([{ no: 11, from: 12, to: 28, why: expect.stringMatching(/Ø16 이상/) }]);
+    expect(r.code).toContain('(드릴 Ø28.');
     // 구멍 자체가 작음 → 구멍과 같은 드릴로만
-    expect(gen(11, 8)).toThrow(/너무 작습니다.*T11 드릴을 구멍과 같은 Ø11. 로 바꾸면/);
-    // 드릴이 구멍보다 큼
-    expect(gen(20, 22)).toThrow(/T11 드릴 지름을 Ø18 이하로/);
+    r = gen(11, 8);
+    expect(r.adjust[0].to).toBe(11);
+    expect(r.code).toContain('구멍 지름과 같아서 드릴로만');
+    // 드릴이 구멍보다 큼 → 보링 여유를 남기는 가장 큰 드릴
+    r = gen(20, 22);
+    expect(r.adjust[0].to).toBe(18);
+    // 맞는 드릴이면 그대로
+    expect(gen(30, 20).adjust).toEqual([]);
+  });
+
+  it('작은 데다 단까지 있는 구멍은 드릴 하나로도 안 되므로 알려 준다', () => {
+    const drawing = ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', 'X11. Z0.', 'Z-5.', 'X8.', 'Z-10.', 'X0.'].join('\n');
+    expect(() => generateProgram({ drawing, stock, tools: withDrill(20), offsets: cfg.offsets })).toThrow(/단이 있어서 드릴 하나로도 못 뚫습니다/);
   });
 
   it('보링바가 구멍보다 크면 시뮬레이션에서 축 건너편 충돌 알람', () => {
