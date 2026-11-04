@@ -843,3 +843,17 @@ body.dropping::after {
     filter: none;
   }
 }
+/* 공구를 바꿨다는 알림 창 */
+.dlg.notice {
+  min-width: 340px;
+  max-width: 480px;
+}
+.dlg.notice ul {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+.dlg.notice b {
+  font-family: var(--mono);
+  font-size: 15px;
+}

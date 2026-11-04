@@ -374,6 +374,19 @@ function makeAnswer(force: boolean) {
       answerKey = JSON.stringify(input);
       save();
       if (active !== ansEditor) rebuild();
+      // 바꾼 공구를 창으로 알린다
+      const list = $('notice-list');
+      list.replaceChildren(
+        ...r.adjust.map((a) => {
+          const li = document.createElement('li');
+          li.innerHTML = '<b></b><br /><span class="muted"></span>';
+          li.querySelector('b')!.textContent = `T${String(a.no).padStart(2, '0')} 드릴 Ø${+a.from.toFixed(3)} → Ø${+a.to.toFixed(3)}`;
+          li.querySelector('span')!.textContent = a.why;
+          return li;
+        }),
+      );
+      const dlg = $<HTMLDialogElement>('dlg-notice');
+      if (!dlg.open) dlg.showModal();
     }
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');

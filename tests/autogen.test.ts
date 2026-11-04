@@ -162,12 +162,31 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     // 구멍 자체가 작음 → 구멍과 같은 드릴로만
     r = gen(11, 8);
     expect(r.adjust[0].to).toBe(11);
-    expect(r.code).toContain('구멍 지름과 같아서 드릴로만');
+    expect(r.code).toContain('구멍이 작아 드릴로만 뚫음');
     // 드릴이 구멍보다 큼 → 보링 여유를 남기는 가장 큰 드릴
     r = gen(20, 22);
     expect(r.adjust[0].to).toBe(18);
     // 맞는 드릴이면 그대로
     expect(gen(30, 20).adjust).toEqual([]);
+  });
+
+  it('드릴은 표준 지름만 쓴다 (Ø13 까지 0.1 단위), 암나사 밑구멍은 탭 드릴', () => {
+    const hole = (d: string, extra: string[] = []) =>
+      generateProgram({ drawing: ['X0. Z0.', 'X20.', 'Z-30.', '(내경)', `X${d} Z0.`, 'Z-10.', 'X0.', ...extra].join('\n'), stock, tools: withDrill(20), offsets: cfg.offsets });
+    // 그냥 Ø4.917 구멍 → 가장 가까운 아래쪽 표준 드릴 Ø4.9
+    let r = hole('4.917');
+    expect(r.adjust[0].to).toBe(4.9);
+    expect(r.code).toContain('표준 드릴 Ø4.9 의 차이 0.017');
+    // M6 암나사 밑구멍(안지름 Ø4.917) → 탭 드릴 Ø5, 내경 나사 바이트는 못 들어가므로 탭 작업 안내
+    r = hole('4.917', ['(나사 M6 Z0. ~ Z-8. 내경)']);
+    expect(r.adjust[0].to).toBe(5);
+    expect(r.code).toContain('(탭 드릴 Ø5. : M6 암나사 밑구멍');
+    expect(r.code).toContain('탭 G84 로 가공');
+    expect(compile(r.code, { ...cfg, tools: withDrill(5) }).alarm).toBeNull();
+    expect(r.code).not.toContain('G76 X6.');
+    // 없는 지름으로 설정된 드릴(Ø4.917)도 표준으로
+    r = generateProgram({ drawing: ['X0. Z0.', 'X20.', 'Z-30.', '(내경)', 'X4.917 Z0.', 'Z-10.', 'X0.'].join('\n'), stock, tools: withDrill(4.917), offsets: cfg.offsets });
+    expect(r.adjust[0].to).toBe(4.9);
   });
 
   it('작은 데다 단까지 있는 구멍은 드릴 하나로도 안 되므로 알려 준다', () => {

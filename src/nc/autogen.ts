@@ -3,7 +3,7 @@ import type { Vec } from './types';
 import { toolShape, type ToolDef, type ToolOffset } from '../machine/tools';
 import { drawingMoves, splitDrawing, type DrawingMove } from '../sim/compare';
 import { protrusionOf, type StockConfig } from '../sim/simulator';
-import { coarsePitch, parseFeatures } from '../sim/features';
+import { coarsePitch, parseFeatures, type ThreadFeature } from '../sim/features';
 
 /**
  * 도면(목표 형상) → 모범 답안 프로그램.
@@ -253,7 +253,11 @@ function faceFirst(moves: DrawingMove[]): DrawingMove[] {
  * 내경: 드릴(G74) → 보링 황삭(G71, 정삭 여유 U 마이너스) → 보링 정삭(G70 + G41).
  * 보링은 드릴 구멍보다 0.5mm 안쪽(반경)에서 시작하고, 그보다 작은 곳(막힌 구멍 바닥 가운데의 드릴 끝 모양)은 남는다.
  */
-function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjust: ToolAdjust[]): string[] {
+/** 표준 드릴: Ø13 까지는 0.1 단위, 그보다 크면 0.5 단위 */
+const isStdDrill = (w: number) => (w <= 13 ? Math.abs(w * 10 - Math.round(w * 10)) < 1e-6 : Math.abs(w * 2 - Math.round(w * 2)) < 1e-6);
+const stdDrillDown = (d: number) => (d <= 13 ? Math.floor(d * 10 + 1e-6) / 10 : Math.floor(d * 2 + 1e-6) / 2);
+
+function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjust: ToolAdjust[], innerThreads: ThreadFeature[]): string[] {
   let drill = input.tools.find((t) => t.type === 'drill');
   const bar = input.tools.find((t) => t.type === 'boring');
   if (!drill) throw new Error('도면에 구멍(내경)이 있는데 설정에 드릴이 없습니다');
@@ -275,35 +279,55 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjus
   const reach = -Math.min(...toolShape(bar).map((p) => p.r));
   const minDrill = Math.ceil(0.5 + reach + 0.2);
   const maxDrill = Math.floor(2 * wall - 2);
-  const drillOnly = straight && Math.abs(drill.width - 2 * wall) <= 0.05;
-  const boreOk = drill.width >= minDrill && drill.width / 2 <= wall + 0.005;
-  if (!drillOnly && !boreOk) {
-    // 설정의 드릴로는 안 되면 맞는 지름으로 바꾼다: 보링바가 들어가면 가장 큰 드릴 + 보링, 안 들어가는 곧은 구멍은 구멍 지름 드릴로만
-    let to: number;
-    let why: string;
-    if (minDrill <= maxDrill) {
-      to = maxDrill;
-      why = drill.width < minDrill ? `보링바(${toolCode(bar.no).slice(0, 3)})가 들어가려면 드릴 구멍이 Ø${minDrill} 이상이어야 해서` : `구멍 Ø${fmt(2 * wall)} 보다 커서`;
-    } else if (straight) {
-      to = Math.round(2 * wall * 1000) / 1000;
-      why = `구멍 Ø${fmt(2 * wall)} 은 보링바가 들어가기에 작아서 드릴로만 뚫으려고`;
-    } else
+  const barFits = minDrill <= maxDrill;
+  // 이 구멍이 암나사 안지름이면 드릴은 탭 드릴 (호칭 - 피치, M6 → Ø5)
+  const tap = innerThreads.find((t) => Math.abs(t.dia - 1.0825 * t.pitch - 2 * wall) < 0.15);
+  const onlySize = tap ? Math.round((tap.dia - tap.pitch) * 1000) / 1000 : stdDrillDown(2 * wall);
+  // 곧은 구멍은 드릴로만: 보링바가 못 들어가거나, 설정 드릴이 이미 구멍과 같은 표준 지름일 때
+  const sameStd = isStdDrill(drill.width) && Math.abs(drill.width - 2 * wall) <= 0.1 && !tap;
+  const drillOnly = straight && (!barFits || sameStd || (tap !== undefined && Math.abs(drill.width - onlySize) < 1e-6));
+  let to: number | null = null;
+  let why = '';
+  if (drillOnly) {
+    if (!sameStd && Math.abs(drill.width - onlySize) > 1e-6) {
+      to = onlySize;
+      why = tap
+        ? `M${tap.dia} 암나사 밑구멍은 탭 드릴 Ø${fmt(onlySize)} 로`
+        : `구멍 Ø${fmt(2 * wall)} 은 보링바가 들어가기에 작아서, 가장 가까운 표준 드릴 Ø${fmt(onlySize)} 로만 뚫으려고`;
+    }
+  } else if (!(drill.width >= minDrill && drill.width / 2 <= wall + 0.005 && isStdDrill(drill.width))) {
+    // 보링바가 들어가면 보링 여유(반경 1mm)를 남기는 가장 큰 표준 드릴 + 보링
+    if (!barFits)
       throw new Error(
         `구멍 Ø${fmt(2 * wall)} 은 보링바(${toolCode(bar.no).slice(0, 3)})가 들어가기에 너무 작고(드릴 구멍이 Ø${minDrill} 이상이어야 함), 단이 있어서 드릴 하나로도 못 뚫습니다`,
       );
+    to = maxDrill;
+    why =
+      drill.width < minDrill
+        ? `보링바(${toolCode(bar.no).slice(0, 3)})가 들어가려면 드릴 구멍이 Ø${minDrill} 이상이어야 해서`
+        : !isStdDrill(drill.width)
+          ? `Ø${fmt(drill.width)} 는 없는 드릴 지름이라 표준 드릴로`
+          : `구멍 Ø${fmt(2 * wall)} 보다 커서`;
+  }
+  if (to !== null) {
     adjust.push({ no: drill.no, from: drill.width, to, why });
     drill = { ...drill, width: to };
   }
   const dr = drill.width / 2;
   const tipLen = dr / Math.tan((59 * Math.PI) / 180);
 
-  if (straight && Math.abs(drill.width - 2 * wall) <= 0.05) {
+  if (drillOnly) {
     // 막힌 구멍은 드릴 몸통(지름 전체)이 바닥까지 가게 → 끝 원뿔은 바닥보다 더 들어간다
     const bottom = pts.find((p) => p.r < wall - 0.01);
     const through = !bottom;
     const drillZ = through ? Math.floor((pts[pts.length - 1].z - tipLen - 1) * 10) / 10 : Math.round((bottom!.z - tipLen) * 1000) / 1000;
     return [
-      `(드릴 Ø${fmt(drill.width)} : 구멍 지름과 같아서 드릴로만 뚫음 · G74 로 5mm 씩 쪼아 들어감${through ? ', 관통' : ''})`,
+      tap
+        ? `(탭 드릴 Ø${fmt(drill.width)} : M${tap.dia} 암나사 밑구멍 · G74 로 5mm 씩 쪼아 들어감${through ? ', 관통' : ''})`
+        : `(드릴 Ø${fmt(drill.width)} : 구멍이 작아 드릴로만 뚫음 · G74 로 5mm 씩 쪼아 들어감${through ? ', 관통' : ''})`,
+      ...(!tap && Math.abs(drill.width - 2 * wall) > 0.001
+        ? [`(도면 구멍 Ø${fmt(2 * wall)} 과 표준 드릴 Ø${fmt(drill.width)} 의 차이 ${fmt(Math.abs(2 * wall - drill.width))} 는 리머 등으로 마무리)`]
+        : []),
       ...(body !== inner ? ['(입구 모따기는 드릴로 못 깎으므로 남음)'] : []),
       ...(through ? [] : [`(드릴 끝 118° 원뿔이 바닥 Z${fmt(bottom!.z)} 보다 ${fmt(tipLen)} 더 들어감)`]),
       `${tName}00 ;`,
@@ -585,7 +609,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
   code.push(`G40 G00 X${fmt(D + 50)} Z${fmt(faceZ + 50)} ;`, 'G28 U0. W0. M09 ;', 'M05 ;');
   code.push(...grooveBlocks(finGrooves, profile, 1, input.tools.find((t) => t.type === 'groove'), faceZ, D));
   const adjust: ToolAdjust[] = [];
-  if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input, adjust));
+  if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input, adjust, feat.threads.filter((t) => t.inner)));
 
   const inside = (z0: number, z1: number, what: string) => {
     if (z0 > faceZ + EPS || z1 < endZ - EPS) throw new Error(`${what} 구간 Z${fmt(z0)} ~ Z${fmt(z1)} 이 도면(Z${fmt(faceZ)} ~ Z${fmt(endZ)}) 밖에 있습니다`);
@@ -636,6 +660,12 @@ export function generateProgram(input: AutoInput): AutoProgram {
       // 암나사: 구멍(안지름) 안쪽에서 시작해 바깥(호칭 지름)까지 깎아 나간다 → G76 X 는 호칭 지름
       if (!innerRaw.length) throw new Error(`내경 나사 ${spec} 가 있는데 도면에 (내경) 구멍 윤곽이 없습니다`);
       const minorDia = t.dia - 1.0825 * t.pitch;
+      const startR = Math.floor((minorDia - 1) * 10) / 20;
+      const below = -Math.min(...toolShape(tool).map((q) => q.r));
+      if (below - startR > minorDia / 2 - 0.2) {
+        code.push(`(내경 나사 ${spec} : 구멍이 작아 내경 나사 바이트가 못 들어감 → 실제로는 탭 G84 로 가공. 연습기에서는 지원하지 않아 생략)`);
+        continue;
+      }
       code.push(
         `(G76 내경 나사 ${spec} : 구멍은 안지름 Ø${fmt(minorDia)} 로 보링, 산높이 ${fmt(h)} / 첫 절입 ${fmt(q / 1000)})`,
         `${toolCode(tool.no).slice(0, 3)}00 ;`,
