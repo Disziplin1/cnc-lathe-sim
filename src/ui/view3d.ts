@@ -169,6 +169,7 @@ function buildTool(def: ToolDef, shape: Vec[], color: string): THREE.Group {
       g.add(box(-10, 10, 30, 110, -22, 6, holderMat));
       break;
     }
+    case 'tap':
     case 'drill': {
       // 날끝 원뿔 + 몸통을 축 둘레로 회전시킨 모양
       const rr = rMax;

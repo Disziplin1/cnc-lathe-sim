@@ -33,7 +33,7 @@ const G_GROUP: Record<string, string> = {
   G98: '05', G99: '05',
   G20: '06', G21: '06',
   G40: '07', G41: '07', G42: '07',
-  G18: '16', G54: '14', G80: '10',
+  G18: '16', G54: '14', G80: '10', G84: '10',
 };
 const CYCLES = ['G90', 'G92', 'G94'];
 const MULTI = ['G70', 'G71', 'G72', 'G73', 'G74', 'G75', 'G76'];
@@ -232,6 +232,7 @@ class Interpreter {
     const before: string[] = [];
     const after: string[] = [];
     for (const m of ms) {
+      if (m === 'M29') continue; // 리지드 탭 (G84 앞에 쓰는 것) — 연습기에서는 표시만
       if (['M03', 'M04', 'M08'].includes(m)) before.push(m);
       else if (['M05', 'M09', 'M00', 'M01', 'M02', 'M30'].includes(m)) after.push(m);
       else throw new NcAlarm('PS0010', `지원하지 않는 M코드: ${m}`);
@@ -297,6 +298,10 @@ class Interpreter {
     } else if (oneShot && MULTI.includes(oneShot)) {
       axisUsed = true;
       this.doMulti(oneShot, w);
+    } else if (oneShot === 'G84') {
+      axisUsed = true;
+      this.flushComp();
+      this.doTap(w);
     }
 
     // ---- 이동 ----
@@ -625,6 +630,39 @@ class Interpreter {
       this.feedTo({ z: tz, r: S.r });
     }
     this.note = `${code} ④ 시작점으로 급속 복귀`;
+    this.rapid(S);
+    this.note = '';
+  }
+
+  /**
+   * G84 정면 탭 사이클 (중심 X0 에서): R 점까지 급속 → 피치(F) 만큼 회전당 이송으로 Z 까지 →
+   * P 만큼 멈춤 → 주축을 거꾸로 돌려 같은 이송으로 R 점까지 → 시작점으로 급속.
+   * R: 시작점에서 R 점까지 Z 거리 (없으면 시작점이 R 점).
+   */
+  private doTap(w: Map<string, Word>) {
+    if (!w.has('Z') && !w.has('W')) throw new NcAlarm('PS0010', 'G84 에 탭 깊이 Z(W) 가 필요합니다');
+    if (!w.has('F') && this.F <= 0) throw new NcAlarm('PS0011', 'G84 에 탭 피치 F 가 필요합니다 (M6 이면 F1.)');
+    const S = { ...this.pos };
+    if (Math.abs(S.r - this.shift.r) > 0.01)
+      throw new NcAlarm('PS0010', 'G84 탭은 중심(X0.)에서 해야 합니다. G00 X0. 으로 먼저 옮기세요');
+    const E = { z: w.has('Z') ? w.get('Z')!.value + this.shift.z : S.z + w.get('W')!.value, r: S.r };
+    const Rp = { z: S.z + (w.get('R')?.value ?? 0), r: S.r };
+    if (E.z >= Rp.z) throw new NcAlarm('PS0010', 'G84 탭 깊이 Z 가 R 점보다 안쪽(-Z)이어야 합니다');
+    const pitch = this.F;
+    const spindle = this.spindle;
+    this.note = 'G84 ① R 점으로 급속';
+    this.rapid(Rp);
+    this.note = `G84 ② 탭 들어감 (회전당 ${pitch}mm = 피치)`;
+    this.feedPath([{ ...this.pos }, E], 'thread', pitch);
+    if (w.has('P')) {
+      this.note = 'G84 ③ 바닥에서 멈춤';
+      this.timed('dwell', w.get('P')!.value / 1000);
+    }
+    this.note = 'G84 ④ 주축 역회전 → 같은 피치로 빠져나옴';
+    this.spindle = spindle === 'M03' ? 'M04' : 'M03';
+    this.feedPath([{ ...this.pos }, Rp], 'thread', pitch);
+    this.spindle = spindle;
+    this.note = 'G84 ⑤ 시작점으로 급속';
     this.rapid(S);
     this.note = '';
   }

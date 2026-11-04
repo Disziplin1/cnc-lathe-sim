@@ -104,7 +104,7 @@ export class CutSim {
     for (const t of tools) {
       this.shapes.set(t.no, toolShape(t));
       if (t.type === 'knurl') this.knurlTools.add(t.no);
-      if (t.type === 'drill') this.drillTools.add(t.no);
+      if (t.type === 'drill' || t.type === 'tap') this.drillTools.add(t.no);
     }
     this.reset();
   }

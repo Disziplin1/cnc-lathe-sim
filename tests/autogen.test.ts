@@ -157,7 +157,7 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
       generateProgram({ drawing: ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', `X${hole}. Z0.`, 'Z-10.', 'X0.'].join('\n'), stock, tools: withDrill(drill), offsets: cfg.offsets });
     // 드릴 구멍이 작아서 보링바가 못 들어감 → 보링바가 들어가는 가장 큰 드릴
     let r = gen(30, 12);
-    expect(r.adjust).toEqual([{ no: 11, from: 12, to: 28, why: expect.stringMatching(/Ø16 이상/) }]);
+    expect(r.adjust).toEqual([{ no: 11, name: '드릴', from: 12, to: 28, why: expect.stringMatching(/Ø16 이상/) }]);
     expect(r.code).toContain('(드릴 Ø28.');
     // 구멍 자체가 작음 → 구멍과 같은 드릴로만
     r = gen(11, 8);
@@ -177,13 +177,22 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     let r = hole('4.917');
     expect(r.adjust[0].to).toBe(4.9);
     expect(r.code).toContain('표준 드릴 Ø4.9 의 차이 0.017');
-    // M6 암나사 밑구멍(안지름 Ø4.917) → 탭 드릴 Ø5, 내경 나사 바이트는 못 들어가므로 탭 작업 안내
+    // M6 암나사 밑구멍(안지름 Ø4.917) → 탭 드릴 Ø5, 내경 나사 바이트는 못 들어가므로 탭 G84
     r = hole('4.917', ['(나사 M6 Z0. ~ Z-8. 내경)']);
     expect(r.adjust[0].to).toBe(5);
     expect(r.code).toContain('(탭 드릴 Ø5. : M6 암나사 밑구멍');
-    expect(r.code).toContain('탭 G84 로 가공');
-    expect(compile(r.code, { ...cfg, tools: withDrill(5) }).alarm).toBeNull();
+    expect(r.code).toContain('G84 Z-8. R-3. F1. ;');
     expect(r.code).not.toContain('G76 X6.');
+    const tools = withDrill(5);
+    const p = compile(r.code, { ...cfg, tools });
+    expect(p.alarm).toBeNull();
+    // 탭은 피치(회전당 1mm) 로 들어갔다가 거꾸로 돌며 나온다
+    const taps = p.segments.filter((s) => s.kind === 'thread' && s.tool === 10);
+    expect(taps).toHaveLength(2);
+    expect(Math.min(...taps.flatMap((s) => s.pts.map((q) => q.z)))).toBeCloseTo(-8, 3);
+    expect(taps[1].snap.spindle).toBe('M04');
+    const sim = new CutSim(p, stock, tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
     // 없는 지름으로 설정된 드릴(Ø4.917)도 표준으로
     r = generateProgram({ drawing: ['X0. Z0.', 'X20.', 'Z-30.', '(내경)', 'X4.917 Z0.', 'Z-10.', 'X0.'].join('\n'), stock, tools: withDrill(4.917), offsets: cfg.offsets });
     expect(r.adjust[0].to).toBe(4.9);

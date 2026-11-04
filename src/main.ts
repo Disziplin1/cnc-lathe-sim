@@ -380,7 +380,7 @@ function makeAnswer(force: boolean) {
         ...r.adjust.map((a) => {
           const li = document.createElement('li');
           li.innerHTML = '<b></b><br /><span class="muted"></span>';
-          li.querySelector('b')!.textContent = `T${String(a.no).padStart(2, '0')} 드릴 Ø${+a.from.toFixed(3)} → Ø${+a.to.toFixed(3)}`;
+          li.querySelector('b')!.textContent = `T${String(a.no).padStart(2, '0')} ${a.name} Ø${+a.from.toFixed(3)} → Ø${+a.to.toFixed(3)}`;
           li.querySelector('span')!.textContent = a.why;
           return li;
         }),
@@ -390,7 +390,7 @@ function makeAnswer(force: boolean) {
     }
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');
-    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? [r.code.includes('G71 P30') ? '드릴 · 내경 보링' : '드릴'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : [])];
+    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? [r.code.includes('G71 P30') ? '드릴 · 내경 보링' : '드릴'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : []), ...(r.code.includes('G84 Z') ? ['탭 G84'] : [])];
     ansInfo.textContent = parts.join(' · ') + ' · 절삭 조건은 고정값';
     // 언제 만들었는지와 바뀐 줄 수를 보여 준다 (탭을 열 때 도면이 바뀌어 저절로 다시 만든 경우도)
     if (force || before) {
@@ -408,7 +408,7 @@ function makeAnswer(force: boolean) {
     if (r.adjust.length)
       ansInfo.textContent =
         r.adjust
-          .map((a) => `🔧 T${String(a.no).padStart(2, '0')} 드릴을 Ø${+a.from.toFixed(3)} → Ø${+a.to.toFixed(3)} 로 바꿈 (${a.why})`)
+          .map((a) => `🔧 T${String(a.no).padStart(2, '0')} ${a.name}을 Ø${+a.from.toFixed(3)} → Ø${+a.to.toFixed(3)} 로 바꿈 (${a.why})`)
           .join(' · ') +
         ' · ' +
         ansInfo.textContent;
@@ -883,7 +883,7 @@ $('btn-settings').onclick = () => {
   for (let n = 1; n <= MAX_TOOLS; n++) {
     const t = settings.tools.find((x) => x.no === n);
     const tr = document.createElement('tr');
-    const opts = (['', 'rough', 'finish', 'groove', 'igroove', 'thread', 'ithread', 'boring', 'drill', 'knurl'] as const)
+    const opts = (['', 'rough', 'finish', 'groove', 'igroove', 'thread', 'ithread', 'boring', 'drill', 'tap', 'knurl'] as const)
       .map((k) => `<option value="${k}" ${(t?.type ?? '') === k ? 'selected' : ''}>${k ? TOOL_LABEL[k] : '— 없음 —'}</option>`)
       .join('');
     tr.innerHTML = `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td><td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td><td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>`;

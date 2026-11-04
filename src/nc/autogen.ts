@@ -23,6 +23,8 @@ export interface AutoProgram {
 
 export interface ToolAdjust {
   no: number;
+  /** 공구 이름 (드릴, 탭) */
+  name: string;
   /** 바꾸기 전 폭 / 지름 */
   from: number;
   to: number;
@@ -310,7 +312,7 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjus
           : `구멍 Ø${fmt(2 * wall)} 보다 커서`;
   }
   if (to !== null) {
-    adjust.push({ no: drill.no, from: drill.width, to, why });
+    adjust.push({ no: drill.no, name: '드릴', from: drill.width, to, why });
     drill = { ...drill, width: to };
   }
   const dr = drill.width / 2;
@@ -562,7 +564,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
   const zc = fmt(faceZ + CLEAR_Z);
   const code: string[] = [
     'O0001 ;',
-    `(모범 답안 : 도면 형상에서 자동으로 만든 외경 단면 · G71 황삭${round ? ' · G73 형상 반복' : ''} · G70 정삭${innerRaw.length ? ' · 드릴 · 내경 보링' : ''})`,
+    '', // 머리말: 다 만든 뒤 실제로 들어간 가공으로 채운다
     '(절삭 조건은 연습용 고정값입니다)',
   ];
   if (finGrooves.length) code.push('(홈은 G71 · G70 으로는 메워서 지나가고, 정삭 뒤에 홈 바이트로 따로 깎음)');
@@ -650,10 +652,6 @@ export function generateProgram(input: AutoInput): AutoProgram {
     inside(t.z0, t.z1, '나사');
     const spec = coarsePitch(t.dia) === t.pitch ? `M${t.dia}` : `M${t.dia}x${t.pitch}`;
     const tool = t.inner ? innerTool : threadTool;
-    if (!tool) {
-      code.push(`(나사 ${spec}${t.inner ? ' 내경' : ''} : 설정에 ${t.inner ? '내경 나사 바이트' : '나사 바이트'}가 없어 생략)`);
-      continue;
-    }
     const h = Math.round(t.pitch * 0.6134 * 1000) / 1000;
     const q = Math.max(100, Math.round((h * 0.38 * 1000) / 10) * 10);
     if (t.inner) {
@@ -661,11 +659,36 @@ export function generateProgram(input: AutoInput): AutoProgram {
       if (!innerRaw.length) throw new Error(`내경 나사 ${spec} 가 있는데 도면에 (내경) 구멍 윤곽이 없습니다`);
       const minorDia = t.dia - 1.0825 * t.pitch;
       const startR = Math.floor((minorDia - 1) * 10) / 20;
-      const below = -Math.min(...toolShape(tool).map((q) => q.r));
-      if (below - startR > minorDia / 2 - 0.2) {
-        code.push(`(내경 나사 ${spec} : 구멍이 작아 내경 나사 바이트가 못 들어감 → 실제로는 탭 G84 로 가공. 연습기에서는 지원하지 않아 생략)`);
+      const fits = tool && -Math.min(...toolShape(tool).map((p) => p.r)) - startR <= minorDia / 2 - 0.2;
+      if (!fits) {
+        // 내경 나사 바이트가 못 들어가는 작은 암나사는 탭 (G84, 중심에서)
+        const tapTool = input.tools.find((x) => x.type === 'tap');
+        if (!tapTool) {
+          code.push(`(내경 나사 ${spec} : 구멍이 작아 탭으로 가공해야 하는데 설정에 탭이 없어 생략)`);
+          continue;
+        }
+        if (Math.abs(tapTool.width - t.dia) > 1e-6)
+          adjust.push({ no: tapTool.no, name: '탭', from: tapTool.width, to: t.dia, why: `${spec} 암나사를 내려면 ${spec} 탭으로` });
+        const tt = toolCode(tapTool.no);
+        code.push(
+          `(탭 ${spec} : G84 탭 사이클. 회전당 이송 = 피치 ${fmt(t.pitch)}, 바닥에서 주축을 거꾸로 돌려 빠져나옴)`,
+          `${tt.slice(0, 3)}00 ;`,
+          'G97 S300 M03 ;',
+          `G00 X0. Z${fmt(faceZ + 5)} ${tt} M08 ;`,
+          `G84 Z${fmt(t.z1)} R-3. F${fmt(t.pitch)} ;`,
+          'G80 ;',
+          'G28 U0. W0. M09 ;',
+          'M05 ;',
+        );
         continue;
       }
+    }
+    if (!tool) {
+      code.push(`(나사 ${spec}${t.inner ? ' 내경' : ''} : 설정에 ${t.inner ? '내경 나사 바이트' : '나사 바이트'}가 없어 생략)`);
+      continue;
+    }
+    if (t.inner) {
+      const minorDia = t.dia - 1.0825 * t.pitch;
       code.push(
         `(G76 내경 나사 ${spec} : 구멍은 안지름 Ø${fmt(minorDia)} 로 보링, 산높이 ${fmt(h)} / 첫 절입 ${fmt(q / 1000)})`,
         `${toolCode(tool.no).slice(0, 3)}00 ;`,
@@ -690,5 +713,19 @@ export function generateProgram(input: AutoInput): AutoProgram {
     );
   }
   code.push('M30 ;');
+  const has = (k: string) => code.some((l) => l.startsWith(k));
+  const steps = [
+    '외경 단면',
+    'G71 황삭',
+    ...(round ? ['G73 형상 반복'] : []),
+    'G70 정삭',
+    ...(has('G75 X') ? ['홈 G75'] : []),
+    ...(has('G74 Z') ? ['드릴'] : []),
+    ...(has('G71 P30') ? ['내경 보링'] : []),
+    ...(has('G84 ') ? ['탭 G84'] : []),
+    ...(has('G76 X') ? ['나사 G76'] : []),
+    ...(has('(널링 Z') ? ['널링'] : []),
+  ];
+  code[1] = `(모범 답안 : 도면 형상에서 자동으로 만든 ${steps.join(' · ')})`;
   return { code: code.join('\n') + '\n', grooves, bore: innerRaw.length > 0, adjust };
 }

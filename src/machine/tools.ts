@@ -1,6 +1,6 @@
 import type { Vec } from '../nc/types';
 
-export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl' | 'ithread' | 'igroove';
+export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl' | 'ithread' | 'igroove' | 'tap';
 
 export interface ToolDef {
   no: number;
@@ -32,6 +32,7 @@ export const TOOL_LABEL: Record<ToolType, string> = {
   knurl: '널링 (롤러)',
   ithread: '내경 나사 바이트 (60°)',
   igroove: '내경 홈 바이트',
+  tap: '탭 (암나사)',
 };
 
 export const TOOL_COLOR: Record<ToolType, string> = {
@@ -44,10 +45,11 @@ export const TOOL_COLOR: Record<ToolType, string> = {
   knurl: '#e8c547',
   ithread: '#a98bff',
   igroove: '#ffd27a',
+  tap: '#ff9f6b',
 };
 
 /** 폭/직경 칸을 쓰는 공구 */
-export const USES_WIDTH: ToolType[] = ['groove', 'igroove', 'drill', 'knurl'];
+export const USES_WIDTH: ToolType[] = ['groove', 'igroove', 'drill', 'tap', 'knurl'];
 /** 노즈 반경이 있는 공구 */
 export const USES_NOSE: ToolType[] = ['rough', 'finish', 'boring'];
 
@@ -63,6 +65,7 @@ export function defaultTools(): ToolDef[] {
     { no: 7, type: 'thread', width: 3, noseR: 0 },
     { no: 8, type: 'ithread', width: 3, noseR: 0 },
     { no: 9, type: 'boring', width: 3, noseR: 0.4 },
+    { no: 10, type: 'tap', width: 6, noseR: 0 },
     { no: 11, type: 'drill', width: 20, noseR: 0 },
     { no: 12, type: 'knurl', width: 8, noseR: 0 },
   ];
@@ -81,6 +84,7 @@ const ADDED_LATER: ToolDef[] = [
   { no: 12, type: 'knurl', width: 8, noseR: 0 },
   { no: 8, type: 'ithread', width: 3, noseR: 0 },
   { no: 6, type: 'igroove', width: 2, noseR: 0 },
+  { no: 10, type: 'tap', width: 6, noseR: 0 },
 ];
 
 /** 저장된 예전 설정에 빠진 값 채우기 */
@@ -221,6 +225,18 @@ export function toolShape(t: ToolDef): Vec[] {
         { z: w, r: 0 },
         { z: w, r: 16 },
         { z: -w, r: 16 },
+      ];
+    }
+    case 'tap': {
+      // 기준점 = 탭 끝 (중심). 끝 1.5mm 는 물림부(모따기), 지름 = 호칭 지름
+      const rr = (t.width > 0 ? t.width : 6) / 2;
+      return [
+        { z: 0, r: -rr * 0.75 },
+        { z: 1.5, r: -rr },
+        { z: 60, r: -rr },
+        { z: 60, r: rr },
+        { z: 1.5, r: rr },
+        { z: 0, r: rr * 0.75 },
       ];
     }
     case 'drill': {
