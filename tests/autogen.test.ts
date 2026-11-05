@@ -170,6 +170,13 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(gen(30, 20).adjust).toEqual([]);
   });
 
+  it('도면 바닥에 드릴 끝 원뿔(120°)이 그려져 있으면 드릴 끝을 원뿔 끝에 맞춘다', () => {
+    // Ø5 구멍, 바닥 Z-10 에서 120° 원뿔 → 끝 Z-10 - 2.5 / tan60° = Z-11.443
+    const r = generateProgram({ drawing: ['X0. Z0.', 'X20.', 'Z-30.', '(내경)', 'X5. Z0.', 'Z-10.', 'X0. Z-11.443'].join('\n'), stock, tools: withDrill(5), offsets: cfg.offsets });
+    expect(r.code).toContain('G74 Z-11.443 ');
+    expect(r.code).toContain('드릴 끝 원뿔 120.°');
+  });
+
   it('드릴은 표준 지름만 쓴다 (Ø13 까지 0.1 단위), 암나사 밑구멍은 탭 드릴', () => {
     const hole = (d: string, extra: string[] = []) =>
       generateProgram({ drawing: ['X0. Z0.', 'X20.', 'Z-30.', '(내경)', `X${d} Z0.`, 'Z-10.', 'X0.', ...extra].join('\n'), stock, tools: withDrill(20), offsets: cfg.offsets });

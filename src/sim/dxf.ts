@@ -512,7 +512,10 @@ function convert(src: string, opt: DxfOptions): { result: Omit<DxfImport, 'flipp
         const t = rightTurn(dir, startDir(e));
         return t === -Math.PI ? -Math.PI : -t;
       };
-      const next = outs.reduce((best, e) => (left(e) > left(best) ? e : best));
+      // 막힌 구멍 바닥에서 축으로 가는 길이 여럿이면(드릴 끝 원뿔 + 원뿔 밑면 선) 가장 깊이 들어가는 원뿔 쪽
+      const next = offAxis.length
+        ? outs.reduce((best, e) => (left(e) > left(best) ? e : best))
+        : outs.reduce((best, e) => (nodes[e.to].x < nodes[best.to].x - EPS ? e : best));
       iused.add(next.prim);
       walk.push(next);
       dir = endDir(next);

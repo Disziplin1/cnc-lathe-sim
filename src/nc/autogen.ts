@@ -322,7 +322,15 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjus
     // 막힌 구멍은 드릴 몸통(지름 전체)이 바닥까지 가게 → 끝 원뿔은 바닥보다 더 들어간다
     const bottom = pts.find((p) => p.r < wall - 0.01);
     const through = !bottom;
-    const drillZ = through ? Math.floor((pts[pts.length - 1].z - tipLen - 1) * 10) / 10 : Math.round((bottom!.z - tipLen) * 1000) / 1000;
+    // 도면에 드릴 끝 원뿔(118° ~ 120°)이 그려져 있으면 드릴 끝을 원뿔 끝에 맞춘다
+    const last = out[out.length - 1];
+    const coneHalf = last.kind === 'line' && last.b.r < EPS && last.a.r > wall - 0.01 && last.a.z > last.b.z ? (Math.atan2(last.a.r, last.a.z - last.b.z) * 180) / Math.PI : 0;
+    const cone = !through && coneHalf > 54 && coneHalf < 66;
+    const drillZ = through
+      ? Math.floor((pts[pts.length - 1].z - tipLen - 1) * 10) / 10
+      : cone
+        ? Math.round(last.b.z * 1000) / 1000
+        : Math.round((bottom!.z - tipLen) * 1000) / 1000;
     return [
       tap
         ? `(탭 드릴 Ø${fmt(drill.width)} : M${tap.dia} 암나사 밑구멍 · G74 로 5mm 씩 쪼아 들어감${through ? ', 관통' : ''})`
@@ -331,7 +339,11 @@ function boreBlocks(inner: DrawingMove[], faceZ: number, input: AutoInput, adjus
         ? [`(도면 구멍 Ø${fmt(2 * wall)} 과 표준 드릴 Ø${fmt(drill.width)} 의 차이 ${fmt(Math.abs(2 * wall - drill.width))} 는 리머 등으로 마무리)`]
         : []),
       ...(body !== inner ? ['(입구 모따기는 드릴로 못 깎으므로 남음)'] : []),
-      ...(through ? [] : [`(드릴 끝 118° 원뿔이 바닥 Z${fmt(bottom!.z)} 보다 ${fmt(tipLen)} 더 들어감)`]),
+      ...(through
+        ? []
+        : cone
+          ? [`(도면 바닥의 드릴 끝 원뿔 ${fmt(Math.round(coneHalf * 2))}° 에 드릴 끝 118° 를 맞춤 · Z${fmt(drillZ)})`]
+          : [`(드릴 끝 118° 원뿔이 바닥 Z${fmt(bottom!.z)} 보다 ${fmt(tipLen)} 더 들어감)`]),
       `${tName}00 ;`,
       'G97 S500 M03 ;',
       `G00 X0. Z${fmt(faceZ + 5)} ${toolCode(drill.no)} M08 ;`,
