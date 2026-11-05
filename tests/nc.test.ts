@@ -235,7 +235,7 @@ describe('2단계: 복합 사이클 / 보정 / 도면 비교', () => {
       const p = compile(code, cfg());
       const sim = new CutSim(p, stock, defaultTools());
       sim.advanceTo(p.duration);
-      return compareStock(sim.stock, target, [], 0.6);
+      return compareStock(sim.workpiece, target, [], 0.6);
     };
     const head2 = `G50 S2000 T0300 ;\nG96 S150 M03 ;\nG00 X60. Z0. T0303 ;\nG01 X-1. F0.1 ;\nG00 X60. Z2. ;\n`;
     const without = res(head2 + body + 'M30 ;\n');

@@ -518,6 +518,33 @@ function backAngle(t: ToolDef): number {
 /** 이동 중에 반경이 줄어드는 곳이 있는지 (척 쪽으로 내려가는 경사) */
 const descends = (m: DrawingMove) => points(m).some((p, i, a) => i > 0 && p.r < a[i - 1].r - 0.001);
 
+/**
+ * 절단: 홈 바이트 오른쪽 날이 도면 끝(endZ)에 오게 놓고 G75 로 축(X0)까지 쪼아 들어가 완성품을 끊는다.
+ * 축 근처에서 G96 이면 회전수가 최대까지 올라가므로 G97 고정 회전수 (절삭 속도 약 80m/min 를 소재 지름 기준으로)
+ */
+function partOffBlocks(tool: ToolDef | undefined, endZ: number, D: number, prot: number, inner: DrawingMove[]): string[] {
+  if (!tool) return ['(절단 : 설정에 홈 바이트가 없어 생략)'];
+  const w = tool.width > 0 ? tool.width : 3;
+  const z = endZ - w;
+  // 척 조와 바이트 사이 1mm 이상
+  if (z < -prot + 1)
+    return [`(절단 : 척에서 나온 길이 ${fmt(prot)} 가 도면 길이 + 바이트 폭 ${fmt(w)} + 1 보다 짧아 생략. 소재 길이를 늘리면 끊음)`];
+  // 관통 구멍이 있으면 구멍까지만 들어가도 떨어진다 (그래도 끝까지 들어가서 꼭지가 안 남게 X0.)
+  const hole = inner.length ? Math.min(...inner.flatMap((m) => points(m).filter((p) => Math.abs(p.z - endZ) < EPS).map((p) => p.r))) : 0;
+  const S = Math.min(1500, Math.max(200, Math.round((1000 * 80) / (Math.PI * D) / 50) * 50));
+  return [
+    `(절단 Z${fmt(endZ)} : 홈 바이트 오른쪽 날을 도면 끝에 맞추고 G75 로 X0. 까지 쪼아 들어가 끊음. 축 근처는 G96 이면 회전수가 치솟으므로 G97 S${S} 고정${hole > EPS ? ` · 관통 구멍 Ø${fmt(2 * hole)} 까지 들어가면 떨어짐` : ''})`,
+    `${toolCode(tool.no).slice(0, 3)}00 ;`,
+    `G97 S${S} M03 ;`,
+    `G00 X${fmt(D + 4)} Z${fmt(z)} ${toolCode(tool.no)} M08 ;`,
+    'G75 R0.5 ;',
+    `G75 X0. Z${fmt(z)} P1000 F0.05 ;`,
+    `G00 X${fmt(D + 4)} ;`,
+    'G28 U0. W0. M09 ;',
+    'M05 ;',
+  ];
+}
+
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
 
 export function generateProgram(input: AutoInput): AutoProgram {
@@ -734,6 +761,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
       'M05 ;',
     );
   }
+  code.push(...partOffBlocks(input.tools.find((t) => t.type === 'groove'), endZ, D, prot, innerRaw));
   code.push('M30 ;');
   const has = (k: string) => code.some((l) => l.startsWith(k));
   const steps = [
@@ -747,6 +775,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
     ...(has('G84 ') ? ['탭 G84'] : []),
     ...(has('G76 X') ? ['나사 G76'] : []),
     ...(has('(널링 Z') ? ['널링'] : []),
+    ...(has('(절단 ') ? ['절단'] : []),
   ];
   code[1] = `(모범 답안 : 도면 형상에서 자동으로 만든 ${steps.join(' · ')})`;
   return { code: code.join('\n') + '\n', grooves, bore: innerRaw.length > 0, adjust };

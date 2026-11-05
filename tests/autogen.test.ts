@@ -24,9 +24,49 @@ function cut(drawing: string, st = stock) {
   expect(p.alarm).toBeNull();
   const sim = new CutSim(p, st, cfg.tools);
   expect(sim.advanceTo(p.duration)).toBeNull();
+  // 모범 답안은 마지막에 절단 → 완성품이 척에서 떨어져 나간다
+  expect(sim.parted).not.toBeNull();
   const target = parseTarget(drawing).target!;
-  return { gen, res: compareStock(sim.stock, target, [], 0.8 * 1.6 + 0.05) };
+  return { gen, res: compareStock(sim.workpiece, target, [], 0.8 * 1.6 + 0.05) };
 }
+
+describe('절단', () => {
+  it('모범 답안 끝에 G97 고정 회전수 G75 절단, 끊긴 완성품만 도면과 비교하고 척에는 남은 소재만', () => {
+    const drawing = 'X0. Z0.\nX20.\nZ-30.\nX30.\nZ-40.\n';
+    const { gen, res } = cut(drawing);
+    expect(gen.code).toContain('G97 S500 M03 ;\nG00 X54. Z-43. T0505 M08 ;\nG75 R0.5 ;\nG75 X0. Z-43. P1000 F0.05 ;');
+    expect(gen.code).toMatch(/\(모범 답안 : .* · 절단\)/);
+    expect(res.maxExcess).toBeLessThan(0.02);
+    expect(res.maxOver).toBeLessThan(0.02);
+    const p = compile(gen.code, cfg);
+    const sim = new CutSim(p, stock, cfg.tools);
+    sim.advanceTo(p.duration);
+    const zs = (ps: typeof sim.stock) => ps.flat().map((q) => q.X / 1000);
+    expect(Math.min(...zs(sim.parted!))).toBeCloseTo(-40, 2);
+    expect(Math.max(...zs(sim.stock))).toBeLessThanOrEqual(-43 + 1e-3);
+  });
+
+  it('척에서 나온 길이가 모자라면 절단은 빼고 이유를 적는다', () => {
+    const drawing = 'X0. Z0.\nX20.\nZ-68.\n';
+    const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).not.toContain('G75 X0.');
+    expect(gen.code).toContain('(절단 : 척에서 나온 길이 70. 가');
+  });
+
+  it('직접 짠 프로그램도 축까지 끊으면 떨어져 나가고, 덜 끊으면 붙어 있다', () => {
+    const run = (x: string) => {
+      const code = `T0505 ;\nG97 S500 M03 ;\nG00 X54. Z-33. ;\nG01 X${x} F0.05 ;\nG00 X54. ;\nM30 ;\n`;
+      const p = compile(code, cfg);
+      const sim = new CutSim(p, stock, cfg.tools);
+      expect(sim.advanceTo(p.duration)).toBeNull();
+      return sim;
+    };
+    expect(run('1.').parted).toBeNull();
+    const sim = run('0.');
+    expect(sim.parted).not.toBeNull();
+    expect(Math.min(...sim.parted!.flat().map((q) => q.X / 1000))).toBeCloseTo(-30, 2);
+  });
+});
 
 describe('모범 답안 자동 생성 (G71 / G70)', () => {
   it('홈 없는 축: 도면대로 깎인다 (모따기 · 테이퍼 · 원호)', () => {
@@ -131,7 +171,7 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(p.alarm).toBeNull();
     const sim = new CutSim(p, stock, tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
-    return { gen, res: compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05) };
+    return { gen, res: compareStock(sim.workpiece, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05) };
   };
 
   it('관통 구멍 Ø20 (C1): 도면대로', () => {
@@ -221,7 +261,7 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     const sim = new CutSim(p, stock, tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
     // 구멍 벽에 암나사 톱니: 바닥 쪽(Z-2 ~ -6) 벽이 탭 드릴 반경(2.5) 과 호칭 반경(3) 사이를 오르내린다
-    const wall = sim.stock
+    const wall = sim.workpiece
       .flatMap((path) => path.map((q) => ({ z: q.X / 1000, r: q.Y / 1000 })))
       .filter((q) => q.z < -2 && q.z > -6 && q.r > 0.1 && q.r < 3.5);
     expect(Math.max(...wall.map((q) => q.r))).toBeCloseTo(3, 1);
@@ -275,7 +315,7 @@ describe('모범 답안: 내경 홈', () => {
     expect(p.alarm).toBeNull();
     const sim = new CutSim(p, stock, cfg.tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
-    const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    const res = compareStock(sim.workpiece, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.02);
   });
@@ -289,7 +329,7 @@ describe('모범 답안: 홈 모따기 · 널링 묶기', () => {
     const p = compile(gen.code, cfg);
     const sim = new CutSim(p, stock, cfg.tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
-    const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    const res = compareStock(sim.workpiece, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.02);
   });
@@ -317,7 +357,7 @@ describe('모범 답안: 둥근 형상 (G73)', () => {
     expect(p.alarm).toBeNull();
     const sim = new CutSim(p, st, cfg.tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
-    const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    const res = compareStock(sim.workpiece, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.05);
   });
@@ -335,7 +375,7 @@ describe('모범 답안: 둥근 형상 (G73)', () => {
     expect(p.alarm).toBeNull();
     const sim = new CutSim(p, st, cfg.tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
-    const res = compareStock(sim.stock, parseTarget(dr).target!, [], 0.8 * 1.6 + 0.05);
+    const res = compareStock(sim.workpiece, parseTarget(dr).target!, [], 0.8 * 1.6 + 0.05);
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.05);
   });

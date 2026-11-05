@@ -212,7 +212,10 @@ export class View3D {
   private stockMesh: THREE.Mesh;
   private toolMesh: THREE.Group | null = null;
   private toolKey = '';
-  private knurlMeshes: THREE.Mesh[] = [];
+  /** 절단된 완성품 (떨어지는 높이 partDrop 까지 내려온다) */
+  private partMesh: THREE.Mesh;
+  private partDrop = 0;
+  private stockR = 25;
   private chuck = new THREE.Group();
   private spin = 0;
   visible = false;
@@ -240,7 +243,12 @@ export class View3D {
       new THREE.BufferGeometry(),
       new THREE.MeshStandardMaterial({ color: '#b9c3cf', metalness: 0.75, roughness: 0.32 }),
     );
-    this.scene.add(this.stockMesh, this.chuck);
+    this.partMesh = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshStandardMaterial({ color: '#b9d9c8', metalness: 0.7, roughness: 0.32 }),
+    );
+    this.partMesh.visible = false;
+    this.scene.add(this.stockMesh, this.partMesh, this.chuck);
     new ResizeObserver(() => this.resize()).observe(host);
   }
 
@@ -258,6 +266,7 @@ export class View3D {
     const cb = chuckBox(cfg);
     const len = cb.maxZ - cb.minZ;
     const R = cfg.diameter / 2;
+    this.stockR = R;
     const metal = new THREE.MeshStandardMaterial({ color: '#4a5363', metalness: 0.6, roughness: 0.45 });
     const body = new THREE.Mesh(new THREE.CylinderGeometry(R + 45, R + 45, 40, 64), metal);
     body.rotation.z = Math.PI / 2;
@@ -277,16 +286,35 @@ export class View3D {
     this.controls.update();
   }
 
-  setStock(paths: Paths, knurled: [number, number][] = []) {
-    this.stockMesh.geometry.dispose();
-    this.stockMesh.geometry = revolve(paths);
-    // 널링 구간은 무늬를 입힌 원통을 소재 표면에 살짝 덮는다 (소재와 같이 돈다)
-    for (const m of this.knurlMeshes) {
-      this.stockMesh.remove(m);
+  /**
+   * 척에 물린 소재와 절단된 완성품. 완성품은 돌지 않고 척 아래로 떨어진다
+   */
+  setStock(paths: Paths, knurled: [number, number][] = [], parted: Paths | null = null) {
+    this.fill(this.stockMesh, paths, knurled);
+    if (parted) {
+      this.fill(this.partMesh, parted, knurled);
+      if (!this.partMesh.visible) {
+        this.partMesh.visible = true;
+        this.partMesh.position.y = 0;
+        this.partMesh.rotation.x = this.spin;
+      }
+      const top = Math.max(...parted.flat().map((q) => q.Y / SCALE));
+      this.partDrop = -(this.stockR + top + 12);
+    } else {
+      this.partMesh.visible = false;
+      this.partMesh.position.y = 0;
+    }
+  }
+
+  /** 단면을 돌려 메시를 만들고, 널링 구간은 무늬를 입힌 원통을 표면에 살짝 덮는다 (메시와 같이 움직인다) */
+  private fill(mesh: THREE.Mesh, paths: Paths, knurled: [number, number][]) {
+    mesh.geometry.dispose();
+    mesh.geometry = revolve(paths);
+    for (const m of [...mesh.children] as THREE.Mesh[]) {
+      mesh.remove(m);
       m.geometry.dispose();
       (m.material as THREE.Material).dispose();
     }
-    this.knurlMeshes = [];
     for (const [a, b] of knurled) {
       const r = outerRadius(paths, a, b);
       if (r <= 0 || b - a < 1e-3) continue;
@@ -294,14 +322,13 @@ export class View3D {
       tex.needsUpdate = true;
       // 마름모 한 칸 약 1.2mm
       tex.repeat.set(Math.max(1, Math.round((2 * Math.PI * r) / 1.2)), Math.max(1, Math.round((b - a) / 1.2)));
-      const mesh = new THREE.Mesh(
+      const k = new THREE.Mesh(
         new THREE.CylinderGeometry(r + 0.03, r + 0.03, b - a, RADIAL, 1, true),
         new THREE.MeshStandardMaterial({ map: tex, metalness: 0.7, roughness: 0.35 }),
       );
-      mesh.rotation.z = Math.PI / 2;
-      mesh.position.x = (a + b) / 2;
-      this.stockMesh.add(mesh);
-      this.knurlMeshes.push(mesh);
+      k.rotation.z = Math.PI / 2;
+      k.position.x = (a + b) / 2;
+      mesh.add(k);
     }
   }
 
@@ -332,6 +359,9 @@ export class View3D {
     // 회전하는 느낌만 주기 위해 실제 rpm 보다 느리게 돌린다
     this.spin += Math.min(spindleRpm, 3000) * 0.0006 * dt * 60;
     this.stockMesh.rotation.x = this.spin;
+    // 떨어지는 완성품: 0.3초쯤에 바닥까지
+    if (this.partMesh.visible && this.partMesh.position.y > this.partDrop)
+      this.partMesh.position.y = Math.max(this.partDrop, this.partMesh.position.y - Math.max(0.5, -this.partDrop) * 0.06 * dt * 60);
     this.renderer.render(this.scene, this.camera);
   }
 }

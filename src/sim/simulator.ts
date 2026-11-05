@@ -1,6 +1,6 @@
 import type { Alarm, Program, Segment, Vec } from '../nc/types';
 import { tapStamp, toolShape, type ToolDef } from '../machine/tools';
-import { bounds, boxOverlap, difference, fromPath, hull, intersectArea, intersection, rect, toPath, translate, type Box, type Paths } from './geometry';
+import { areaOf, bounds, boxOverlap, difference, fromPath, hull, intersectArea, intersection, rect, toPath, translate, type Box, type Paths } from './geometry';
 
 export interface StockConfig {
   /** 소재 지름 Ø */
@@ -80,6 +80,8 @@ export function posInSegment(s: Segment, local: number): Vec {
  */
 export class CutSim {
   stock: Paths = [];
+  /** 절단(공구가 축까지 들어가 척에서 떨어져 나간)된 완성품. 아직 안 끊었으면 null */
+  parted: Paths | null = null;
   /** 널링된 Z 구간 [작은 Z, 큰 Z] (소재는 깎지 않고 무늬만 남는다) */
   knurled: [number, number][] = [];
   version = 0;
@@ -123,12 +125,18 @@ export class CutSim {
       ]),
     ];
     this.updateBox();
+    this.parted = null;
     this.knurled = [];
     this.segIdx = 0;
     this.edgeIdx = 1;
     this.lastPt = null;
     this.time = 0;
     this.version++;
+  }
+
+  /** 도면과 비교할 공작물: 끊었으면 떨어진 완성품, 아니면 척에 물린 소재 */
+  get workpiece(): Paths {
+    return this.parted ?? this.stock;
   }
 
   shapeFor(tool: number): Vec[] | undefined {
@@ -286,8 +294,26 @@ export class CutSim {
   private cut(poly: Vec[], box = bounds([poly])) {
     if (!boxOverlap(box, this.stockBox)) return;
     this.stock = difference(this.stock, [toPath(poly)]);
+    this.separate();
     this.updateBox();
     this.version++;
+  }
+
+  /**
+   * 소재가 여러 조각으로 나뉘었으면 척에 물린 조각만 남긴다.
+   * 척에서 떨어진 조각 중 가장 큰 것이 절단된 완성품 (처음 끊은 것만 기억, 나머지는 칩)
+   */
+  private separate() {
+    if (this.stock.length < 2) return;
+    const chuckZ = -protrusionOf(this.stockCfg);
+    const held: Paths = [];
+    const loose: Paths = [];
+    for (const p of this.stock) (bounds([fromPath(p)]).minZ < chuckZ + 1e-3 ? held : loose).push(p);
+    if (!held.length || !loose.length) return;
+    this.stock = held;
+    if (this.parted) return;
+    const big = loose.reduce((a, b) => (areaOf(b) > areaOf(a) ? b : a));
+    if (areaOf(big) > 0.5) this.parted = [big];
   }
 
   private updateBox() {

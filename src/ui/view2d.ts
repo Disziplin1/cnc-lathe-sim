@@ -8,6 +8,8 @@ import type { CompareResult, Target } from '../sim/compare';
 export interface Frame2D {
   prog: Program;
   stock: Paths;
+  /** 절단되어 척에서 떨어진 완성품 (제자리에 다른 색으로 그린다) */
+  parted: Paths | null;
   /** 널링된 Z 구간 (마름모 무늬로 그린다) */
   knurled: [number, number][];
   stockCfg: StockConfig;
@@ -160,23 +162,37 @@ export class View2D {
     c.fillRect(X(cb.minZ), Y(cb.maxR), jawW, jawH);
     c.fillRect(X(cb.minZ), Y(-R), jawW, jawH);
 
-    // 공작물 (위 + 아래 대칭)
-    for (const sgn of [1, -1]) {
-      c.beginPath();
-      for (const path of f.stock) {
-        path.forEach((q, i) => {
-          const x = X(q.X / SCALE);
-          const y = Y((sgn * q.Y) / SCALE);
-          if (i === 0) c.moveTo(x, y);
-          else c.lineTo(x, y);
-        });
-        c.closePath();
+    // 공작물 (위 + 아래 대칭). 절단된 완성품은 초록빛으로
+    const body = (paths: Paths, top: string, bottom: string, edge: string) => {
+      for (const sgn of [1, -1]) {
+        c.beginPath();
+        for (const path of paths) {
+          path.forEach((q, i) => {
+            const x = X(q.X / SCALE);
+            const y = Y((sgn * q.Y) / SCALE);
+            if (i === 0) c.moveTo(x, y);
+            else c.lineTo(x, y);
+          });
+          c.closePath();
+        }
+        c.fillStyle = sgn > 0 ? top : bottom;
+        c.fill('evenodd');
+        c.strokeStyle = edge;
+        c.lineWidth = 1;
+        c.stroke();
       }
-      c.fillStyle = sgn > 0 ? '#8b97a6' : '#6d7887';
-      c.fill('evenodd');
-      c.strokeStyle = '#c9d3df';
-      c.lineWidth = 1;
-      c.stroke();
+    };
+    body(f.stock, '#8b97a6', '#6d7887', '#c9d3df');
+    if (f.parted) {
+      body(f.parted, '#7fae95', '#638c77', '#cdeedd');
+      const pts = f.parted.flat();
+      const zMid = (Math.min(...pts.map((q) => q.X)) + Math.max(...pts.map((q) => q.X))) / 2 / SCALE;
+      const rTop = Math.max(...pts.map((q) => q.Y)) / SCALE;
+      c.fillStyle = '#cdeedd';
+      c.font = '12px system-ui, sans-serif';
+      c.textAlign = 'center';
+      c.fillText('절단된 완성품', X(zMid), Y(rTop) - 8);
+      c.textAlign = 'start';
     }
 
     // 널링: 소재 모양 안쪽에 빗금 두 방향 (마름모 무늬)
@@ -184,7 +200,7 @@ export class View2D {
       c.save();
       c.beginPath();
       for (const sgn of [1, -1])
-        for (const path of f.stock) {
+        for (const path of [...f.stock, ...(f.parted ?? [])]) {
           path.forEach((q, i) => (i === 0 ? c.moveTo(X(q.X / SCALE), Y((sgn * q.Y) / SCALE)) : c.lineTo(X(q.X / SCALE), Y((sgn * q.Y) / SCALE))));
           c.closePath();
         }

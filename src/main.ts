@@ -392,7 +392,7 @@ function makeAnswer(force: boolean) {
     }
     ansEditor.text = r.code;
     ansInfo.classList.remove('err');
-    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? [r.code.includes('G71 P30') ? '드릴 · 내경 보링' : '드릴'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : []), ...(r.code.includes('G84 Z') ? ['탭 G84'] : [])];
+    const parts = ['외경 G71', ...(r.code.includes('G73 P') ? ['G73'] : []), 'G70', ...(r.bore ? [r.code.includes('G71 P30') ? '드릴 · 내경 보링' : '드릴'] : []), ...(r.code.includes('G75 X') ? ['홈 G75'] : []), ...(r.code.includes('G84 Z') ? ['탭 G84'] : []), ...(r.code.includes('G75 X0.') ? ['절단'] : [])];
     ansInfo.textContent = parts.join(' · ') + ' · 절삭 조건은 고정값';
     // 언제 만들었는지와 바뀐 줄 수를 보여 준다 (탭을 열 때 도면이 바뀌어 저절로 다시 만든 경우도)
     if (force || before) {
@@ -528,7 +528,7 @@ function updateCompare(now: number, running: boolean) {
     lastCmpTime = now;
     const t0 = performance.now();
     const noseMax = Math.max(0, ...settings.tools.map((t) => t.noseR));
-    cmpResult = compareStock(player.sim.stock, target, threadRanges(prog), noseMax * 1.6 + 0.05);
+    cmpResult = compareStock(player.sim.workpiece, target, threadRanges(prog), noseMax * 1.6 + 0.05);
     lastCmpCost = performance.now() - t0;
   }
   if (!cmpResult) return;
@@ -699,6 +699,7 @@ function updateUi(now: number, dt: number) {
   view2d.setFrame({
     prog,
     stock: player.sim.stock,
+    parted: player.sim.parted,
     knurled: player.sim.knurled,
     stockCfg: settings.stock,
     tools: settings.tools,
@@ -717,7 +718,7 @@ function updateUi(now: number, dt: number) {
       last3dVersion = player.sim.version;
       last3dTime = now;
       const t0 = performance.now();
-      view3d.setStock(player.sim.stock, player.sim.knurled);
+      view3d.setStock(player.sim.stock, player.sim.knurled, player.sim.parted);
       last3dCost = performance.now() - t0;
     }
     const def = settings.tools.find((t) => t.no === seg?.tool);
