@@ -35,29 +35,47 @@ export function coarsePitch(dia: number): number | null {
 }
 
 const NUM = '(-?\\d+(?:\\.\\d*)?|-?\\.\\d+)';
-const RANGE = `Z\\s*${NUM}\\s*~\\s*Z\\s*${NUM}`;
-const THREAD_RE = new RegExp(`\\(\\s*나사\\s+M\\s*(\\d+(?:\\.\\d+)?)(?:\\s*[xX×*]\\s*(\\d+(?:\\.\\d+)?))?\\s+${RANGE}(\\s*내경)?`);
-const KNURL_RE = new RegExp(`\\(\\s*널링\\s+${RANGE}`);
+/** Z 구간: "Z0. ~ Z-13." / "Z0~Z-13" / "Z0 ~ -13" (뒤쪽 Z 는 없어도 됨) */
+const RANGE_RE = new RegExp(`Z\\s*${NUM}\\s*[~∼〜]\\s*Z?\\s*${NUM}`, 'i');
+/** 나사 호칭: M6, M20x1.5, M20×1.5 (앞이 글자·숫자면 다른 말의 일부라서 제외) */
+const SPEC_RE = /(?:^|[^A-Za-z0-9])M\s*(\d+(?:\.\d+)?)(?:\s*[xX×*]\s*(\d+(?:\.\d+)?))?/;
+/** 구멍 안쪽 나사라는 말 */
+const INNER_RE = /내경|암나사|탭/;
 
+/**
+ * 도면 텍스트에서 나사 · 널링 줄 읽기. 괄호 안 말의 순서는 상관없다.
+ *   (나사 M6 Z0. ~ Z-13. 내경) = (내경 나사 M6 Z0~Z-13) = (암나사 Z0.~Z-13. M6)
+ * 나사 · 널링이라는 말만 있고 호칭 · 구간이 둘 다 없으면 이름 주석으로 보고 넘어간다.
+ */
 export function parseFeatures(text: string): { threads: ThreadFeature[]; knurls: KnurlFeature[]; errors: { line: number; message: string }[] } {
   const threads: ThreadFeature[] = [];
   const knurls: KnurlFeature[] = [];
   const errors: { line: number; message: string }[] = [];
   text.split(/\r?\n/).forEach((raw, line) => {
-    const s = raw.normalize('NFKC');
-    if (/\(\s*나사/.test(s)) {
-      const m = THREAD_RE.exec(s);
-      if (!m) return void errors.push({ line, message: '나사 줄 형식: (나사 M20x1.5 Z0. ~ Z-18.)' });
-      const dia = parseFloat(m[1]);
-      const pitch = m[2] ? parseFloat(m[2]) : coarsePitch(dia);
-      if (!pitch) return void errors.push({ line, message: `M${dia} 의 보통나사 피치를 모릅니다. M${dia}x1.5 처럼 피치를 써 주세요` });
-      const [a, b] = [parseFloat(m[3]), parseFloat(m[4])];
-      threads.push({ dia, pitch, z0: Math.max(a, b), z1: Math.min(a, b), inner: !!m[5], line });
-    } else if (/\(\s*널링/.test(s)) {
-      const m = KNURL_RE.exec(s);
-      if (!m) return void errors.push({ line, message: '널링 줄 형식: (널링 Z-32. ~ Z-92.)' });
-      const [a, b] = [parseFloat(m[1]), parseFloat(m[2])];
-      knurls.push({ z0: Math.max(a, b), z1: Math.min(a, b), line });
+    for (const c of raw.normalize('NFKC').match(/\([^)]*\)?/g) ?? []) {
+      const range = RANGE_RE.exec(c);
+      const z = range ? [parseFloat(range[1]), parseFloat(range[2])] : null;
+      if (/나사|탭/.test(c)) {
+        const m = SPEC_RE.exec(c);
+        if (!m && !z) continue;
+        if (!m || !z) {
+          errors.push({ line, message: `나사 줄에 ${!m ? '호칭(M6, M20x1.5)' : 'Z 구간(Z0. ~ Z-13.)'} 이 없습니다. 예: (나사 M6 Z0. ~ Z-13. 내경)` });
+          continue;
+        }
+        const dia = parseFloat(m[1]);
+        const pitch = m[2] ? parseFloat(m[2]) : coarsePitch(dia);
+        if (!pitch) {
+          errors.push({ line, message: `M${dia} 의 보통나사 피치를 모릅니다. M${dia}x1.5 처럼 피치를 써 주세요` });
+          continue;
+        }
+        threads.push({ dia, pitch, z0: Math.max(z[0], z[1]), z1: Math.min(z[0], z[1]), inner: INNER_RE.test(c), line });
+      } else if (/널링/.test(c)) {
+        if (!z) {
+          if (/^\(\s*널링/.test(c)) errors.push({ line, message: '널링 줄에 Z 구간이 없습니다. 예: (널링 Z-32. ~ Z-92.)' });
+          continue;
+        }
+        knurls.push({ z0: Math.max(z[0], z[1]), z1: Math.min(z[0], z[1]), line });
+      }
     }
   });
   return { threads, knurls, errors };

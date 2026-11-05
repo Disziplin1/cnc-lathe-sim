@@ -103,7 +103,7 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     const gen = (drawing: string) => () => generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
     const base = ['X0. Z0.', 'X20.', 'Z-20.'];
     expect(gen([...base, '(나사 M7 Z0. ~ Z-10.)'].join('\n'))).toThrow(/M7x1.5 처럼/);
-    expect(gen([...base, '(나사 M20 Z0)'].join('\n'))).toThrow(/나사 줄 형식/);
+    expect(gen([...base, '(나사 M20 Z0)'].join('\n'))).toThrow(/나사 줄에 Z 구간/);
     expect(gen([...base, '(널링 Z-10. ~ Z-40.)'].join('\n'))).toThrow(/도면\(Z0. ~ Z-20.\) 밖/);
   });
 });
