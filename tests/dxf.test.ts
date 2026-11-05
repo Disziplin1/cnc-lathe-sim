@@ -219,6 +219,13 @@ describe('DXF 나사 · 널링 글자 찾기', () => {
     sameProfile(r.text, 'X0. Z0.\nX5.\nX6. Z-0.5\nZ-32.\nX15.\nZ-92.\n');
   });
 
+  it('치수 글자 "M<>*L70" 의 <> 는 잰 값(42)으로 바꿔 읽는다', () => {
+    const dim: Ent[] = [...ents.filter((e) => e[0] !== 'DIMENSION'), ['DIMENSION', [[8, 'DIM'], [1, 'M<>*L70'], [42, 6], [11, 100], [21, ax]]]];
+    const r = dxfToTarget(dxf(dim, [['CENTER', 'CENTER']]));
+    expect(r.threads).toBe(1);
+    expect(r.text).toContain('(나사 M6 Z0. ~ Z-15.)');
+  });
+
   it('KNURLING 글자 하나에 화살표가 둘이면 두 구간 모두 널링', () => {
     const two: Ent[] = [...ents, ['LEADER', [[8, 'DIM'], [10, 70], [20, ax + 3], [10, 26], [20, ax + 19]]]];
     const r = dxfToTarget(dxf(two, [['CENTER', 'CENTER']]));

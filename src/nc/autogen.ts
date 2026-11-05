@@ -714,11 +714,20 @@ export function generateProgram(input: AutoInput): AutoProgram {
       );
       continue;
     }
+    // 시작점(나사 앞 Z+ 쪽)은 공구가 골지름까지 내려가도 비어 있어야 한다. 바로 앞에 더 큰 지름(턱)이 있으면 이 방향으로는 못 깎음
+    let lead = 0;
+    while (lead < 5 && (t.z0 + lead + 0.1 > faceZ - EPS || radiusAt(out, t.z0 + lead + 0.1) <= t.dia / 2 + EPS)) lead = Math.round((lead + 0.1) * 10) / 10;
+    if (lead < Math.max(1, 2 * t.pitch)) {
+      code.push(
+        `(나사 ${spec} Z${fmt(t.z0)} ~ Z${fmt(t.z1)} : 끝면 쪽 바로 앞에 더 큰 지름의 턱이 있어 이 방향으로는 G76 이 들어갈 자리가 없어 생략. 반대쪽을 물고 끝면이 되게 돌려서 깎음)`,
+      );
+      continue;
+    }
     code.push(
       `(G76 나사 ${spec} : 산높이 ${fmt(h)} / 첫 절입 ${fmt(q / 1000)} / 골지름 X${fmt(t.dia - 2 * h)})`,
       `${toolCode(tool.no).slice(0, 3)}00 ;`,
       'G97 S600 M03 ;',
-      `G00 X${fmt(t.dia + 4)} Z${fmt(t.z0 + 5)} ${toolCode(tool.no)} M08 ;`,
+      `G00 X${fmt(t.dia + 4)} Z${fmt(t.z0 + lead)} ${toolCode(tool.no)} M08 ;`,
       'G76 P020060 Q50 R0.05 ;',
       `G76 X${fmt(t.dia - 2 * h)} Z${fmt(t.z1)} P${Math.round(h * 1000)} Q${q} F${fmt(t.pitch)} ;`,
       'G28 U0. W0. M09 ;',

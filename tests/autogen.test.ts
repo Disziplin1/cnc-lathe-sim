@@ -99,6 +99,19 @@ describe('모범 답안 자동 생성 (G71 / G70)', () => {
     expect(sim.knurled[0][1]).toBeCloseTo(-32, 1);
   });
 
+  it('나사 바로 앞(끝면 쪽)에 큰 지름 턱이 있으면 G76 은 빼고 이유를 적는다', () => {
+    // 머리 Ø10 x 6 뒤에 M6 축 (핀을 머리 쪽이 끝면이 되게 물린 경우)
+    const drawing = ['X0. Z0.', 'X10.', 'Z-6.', 'X6.', 'Z-60.', 'X12.', 'Z-70.', '(나사 M6 Z-6. ~ Z-60.)'].join('\n');
+    const st = { diameter: 15, length: 90, grip: 15, faceAllowance: 1 };
+    const gen = generateProgram({ drawing, stock: st, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).not.toContain('G76 X');
+    expect(gen.code).toContain('(나사 M6 Z-6. ~ Z-60. : 끝면 쪽 바로 앞에 더 큰 지름의 턱이 있어');
+    const p = compile(gen.code, cfg);
+    expect(p.alarm).toBeNull();
+    const sim = new CutSim(p, st, cfg.tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+  });
+
   it('나사 줄 형식이 틀리면 알려 준다', () => {
     const gen = (drawing: string) => () => generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
     const base = ['X0. Z0.', 'X20.', 'Z-20.'];

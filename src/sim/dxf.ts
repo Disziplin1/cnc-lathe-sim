@@ -216,7 +216,9 @@ function toPrims(src: string): Parsed {
     } else if (e.type === 'TEXT' || e.type === 'MTEXT' || e.type === 'DIMENSION') {
       // MTEXT 는 긴 글이 3 번 코드로 나뉘어 온다 (치수의 3 번은 치수 스타일 이름)
       const codes = e.type === 'MTEXT' ? [3, 1] : [1];
-      const raw = e.codes.filter(([c]) => codes.includes(c)).map(([, v]) => v).join('');
+      let raw = e.codes.filter(([c]) => codes.includes(c)).map(([, v]) => v).join('');
+      // 치수 글자의 <> 는 잰 값(42) 자리 (예: "M<>*L70" → "M6*L70")
+      if (e.type === 'DIMENSION' && raw.includes('<>')) raw = raw.replace(/<>/g, String(Math.round(num(e, 42) * k * 1000) / 1000));
       const text = plainText(raw);
       if (!text) continue;
       // 치수는 문자 위치(11/21), 문자는 삽입점(10/20)
