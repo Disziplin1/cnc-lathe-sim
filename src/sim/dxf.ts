@@ -374,12 +374,23 @@ function rightTurn(inc: P, out: P): number {
 }
 
 /**
+ * 이 길로 들어설 때 오른쪽으로 꺾는 정도. 출발 방향이 같으면(직선과 그 직선에 접한 원호)
+ * 시계 방향으로 휘는 원호가 조금 더 오른쪽, 반시계 원호가 조금 더 왼쪽이다
+ */
+function turnOf(inc: P, e: Edge): number {
+  const t = rightTurn(inc, startDir(e));
+  if (e.prim.kind !== 'arc' || t === -Math.PI) return t;
+  return t + (e.rev ? 1e-4 : -1e-4);
+}
+
+/**
  * DXF → 도면 텍스트. 고른 방향으로 읽었는데 척 쪽 끝이 축까지 내려와 뾰족하면(물 수 없음)
  * 반대 방향이 물 수 있는 모양일 때 끝면 방향을 바꿔서 돌려준다.
+ * "끝면이 왼쪽" 을 직접 골랐으면 그 방향을 그대로 쓴다 (반대쪽 끝을 먼저 깎는 1차 가공 등)
  */
 export function dxfToTarget(src: string, opt: DxfOptions = {}): DxfImport {
   const r = convert(src, opt);
-  if (r.chuckR < 0.5) {
+  if (r.chuckR < 0.5 && !opt.faceLeft) {
     try {
       const other = convert(src, { ...opt, faceLeft: !opt.faceLeft });
       if (other.chuckR >= 0.5) return { ...other.result, flipped: true };
@@ -452,7 +463,7 @@ function convert(src: string, opt: DxfOptions): { result: Omit<DxfImport, 'flipp
   for (let guard = 0; guard < prims.length + 1; guard++) {
     const outs = (adj.get(at) ?? []).filter((e) => !used.has(e.prim));
     if (!outs.length) break;
-    const next = outs.reduce((best, e) => (rightTurn(dir, startDir(e)) > rightTurn(dir, startDir(best)) ? e : best));
+    const next = outs.reduce((best, e) => (turnOf(dir, e) > turnOf(dir, best) ? e : best));
     used.add(next.prim);
     path.push(next);
     dir = endDir(next);
@@ -509,7 +520,7 @@ function convert(src: string, opt: DxfOptions): { result: Omit<DxfImport, 'flipp
       if (offAxis.length) outs = offAxis;
       // 왼쪽으로 가장 많이 꺾는 길 (되돌아가는 길은 가장 나중)
       const left = (e: Edge) => {
-        const t = rightTurn(dir, startDir(e));
+        const t = turnOf(dir, e);
         return t === -Math.PI ? -Math.PI : -t;
       };
       // 막힌 구멍 바닥에서 축으로 가는 길이 여럿이면(드릴 끝 원뿔 + 원뿔 밑면 선) 가장 깊이 들어가는 원뿔 쪽

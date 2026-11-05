@@ -105,6 +105,32 @@ describe('DXF 불러오기', () => {
     sameProfile(dxfToTarget(src, { faceLeft: true }).text, WANT);
   });
 
+  it('끝면이 왼쪽: 단의 세로선과 그 아래 필렛 원호가 같은 방향으로 출발해도 원호를 따라간다', () => {
+    // 끝면 x=0 (왼쪽), Ø20 → 단(세로선이 축까지 그려짐) → 필렛 R1.5 → Ø7 → Ø20 → 척 쪽 x=50
+    const src = dxf([
+      line(0, 0, 0, 10),
+      line(0, 10, 20, 10),
+      line(20, 10, 20, 0),
+      arc(21.5, 5, 1.5, 180, 270),
+      line(21.5, 3.5, 40, 3.5),
+      line(40, 3.5, 40, 10),
+      line(40, 10, 50, 10),
+      line(50, 10, 50, 0),
+      line(0, 0, 50, 0, 'CENTER'),
+    ]);
+    const r = dxfToTarget(src, { faceLeft: true });
+    expect(r.flipped).toBe(false);
+    sameProfile(r.text, ['X0. Z0.', 'X20.', 'Z-20.', 'X10.', 'G02 X7. Z-21.5 R1.5', 'G01 Z-40.', 'X20.', 'Z-50.'].join('\n'));
+  });
+
+  it('끝면이 왼쪽을 직접 고르면 척 쪽 끝이 뾰족해도 뒤집지 않는다', () => {
+    // 끝면 x=0 Ø20, 척 쪽 x=30 에서 원뿔로 축까지
+    const src = dxf([line(0, 0, 0, 10), line(0, 10, 20, 10), line(20, 10, 30, 0), line(0, 0, 30, 0, 'CENTER')]);
+    const r = dxfToTarget(src, { faceLeft: true });
+    expect(r.flipped).toBe(false);
+    sameProfile(r.text, ['X0. Z0.', 'X20.', 'Z-20.', 'X0. Z-30.'].join('\n'));
+  });
+
   it('원호: 오목 R1 은 G02, 볼록 R2 는 G03 (ARC 엔티티)', () => {
     // 끝면 x=50, Ø20 → 오목 R1 → 단 → Ø40 볼록 R2 → 척
     const src = dxf([
