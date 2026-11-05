@@ -519,30 +519,82 @@ function backAngle(t: ToolDef): number {
 const descends = (m: DrawingMove) => points(m).some((p, i, a) => i > 0 && p.r < a[i - 1].r - 0.001);
 
 /**
+ * 척 쪽 끝에서 끝면 쪽으로 거슬러 가며 반경이 줄지 않는 꼬리 = 척 쪽을 바라보는 면 (머리 뒤 R, 뒤 모따기, 뒤로 내려가는 단).
+ * 외경 바이트는 못 깎지만 홈 바이트 오른쪽 날로 뒤에서 따라갈 수 있다. 위쪽 끝(가장 높은 곳)의 평평한 구간은 뺀다
+ */
+function backTail(profile: DrawingMove[]): DrawingMove[] {
+  const tail: DrawingMove[] = [];
+  for (let i = profile.length - 1; i >= 0; i--) {
+    const m = profile[i];
+    const pts = points(m);
+    let k = pts.length - 1;
+    while (k > 0 && pts[k].z <= pts[k - 1].z + EPS && pts[k].r <= pts[k - 1].r + EPS) k--;
+    if (k === 0) {
+      tail.unshift(m);
+      continue;
+    }
+    if (k < pts.length - 1) tail.unshift(part(m, pts[k], m.b));
+    break;
+  }
+  while (tail.length && tail[0].kind === 'line' && Math.abs(tail[0].a.r - tail[0].b.r) < EPS) tail.shift();
+  return tail.length && tail[0].a.r > tail[tail.length - 1].b.r + 0.01 ? tail : [];
+}
+
+/** 절단할 수 있는지: 홈 바이트가 있고 척과 바이트 사이가 1mm 이상 */
+function canPartOff(tool: ToolDef | undefined, endZ: number, prot: number): boolean {
+  if (!tool) return false;
+  const w = tool.width > 0 ? tool.width : 3;
+  return endZ - w >= -prot + 1;
+}
+
+/**
  * 절단: 홈 바이트 오른쪽 날이 도면 끝(endZ)에 오게 놓고 G75 로 축(X0)까지 쪼아 들어가 완성품을 끊는다.
+ * 척 쪽을 바라보는 면(tail)이 있으면 끊기 전에 오른쪽 날로 뒤에서 깎는다:
+ * 바이트 폭보다 좁은 간격으로 옆으로 옮기며 쪼아 내려가 황삭 → 형상을 따라 정삭.
  * 축 근처에서 G96 이면 회전수가 최대까지 올라가므로 G97 고정 회전수 (절삭 속도 약 80m/min 를 소재 지름 기준으로)
  */
-function partOffBlocks(tool: ToolDef | undefined, endZ: number, D: number, prot: number, inner: DrawingMove[]): string[] {
+function partOffBlocks(tool: ToolDef | undefined, endZ: number, D: number, prot: number, inner: DrawingMove[], tail: DrawingMove[]): string[] {
   if (!tool) return ['(절단 : 설정에 홈 바이트가 없어 생략)'];
   const w = tool.width > 0 ? tool.width : 3;
-  const z = endZ - w;
-  // 척 조와 바이트 사이 1mm 이상
-  if (z < -prot + 1)
+  if (!canPartOff(tool, endZ, prot))
     return [`(절단 : 척에서 나온 길이 ${fmt(prot)} 가 도면 길이 + 바이트 폭 ${fmt(w)} + 1 보다 짧아 생략. 소재 길이를 늘리면 끊음)`];
+  const z = endZ - w;
   // 관통 구멍이 있으면 구멍까지만 들어가도 떨어진다 (그래도 끝까지 들어가서 꼭지가 안 남게 X0.)
-  const hole = inner.length ? Math.min(...inner.flatMap((m) => points(m).filter((p) => Math.abs(p.z - endZ) < EPS).map((p) => p.r))) : 0;
+  const atEnd = inner.flatMap((m) => points(m).filter((p) => Math.abs(p.z - endZ) < EPS).map((p) => p.r));
+  const hole = atEnd.length ? Math.min(...atEnd) : 0;
   const S = Math.min(1500, Math.max(200, Math.round((1000 * 80) / (Math.PI * D) / 50) * 50));
-  return [
+  const out = [
     `(절단 Z${fmt(endZ)} : 홈 바이트 오른쪽 날을 도면 끝에 맞추고 G75 로 X0. 까지 쪼아 들어가 끊음. 축 근처는 G96 이면 회전수가 치솟으므로 G97 S${S} 고정${hole > EPS ? ` · 관통 구멍 Ø${fmt(2 * hole)} 까지 들어가면 떨어짐` : ''})`,
-    `${toolCode(tool.no).slice(0, 3)}00 ;`,
-    `G97 S${S} M03 ;`,
-    `G00 X${fmt(D + 4)} Z${fmt(z)} ${toolCode(tool.no)} M08 ;`,
-    'G75 R0.5 ;',
-    `G75 X0. Z${fmt(z)} P1000 F0.05 ;`,
-    `G00 X${fmt(D + 4)} ;`,
-    'G28 U0. W0. M09 ;',
-    'M05 ;',
   ];
+  const head = [`${toolCode(tool.no).slice(0, 3)}00 ;`, `G97 S${S} M03 ;`, `G00 X${fmt(D + 4)} Z${fmt(z)} ${toolCode(tool.no)} M08 ;`, 'G75 R0.5 ;'];
+  if (!tail.length) out.push(...head, `G75 X0. Z${fmt(z)} P1000 F0.05 ;`);
+  else {
+    const top = tail[0].a;
+    const endR = tail[tail.length - 1].b.r;
+    // 황삭: 오른쪽 날 위치 zc 를 끝(endZ)부터 위(top)까지. 깊이는 바이트 밑면 아래 형상의 가장 높은 곳 + 0.2
+    const tailPts = tail.flatMap(points);
+    const depthAt = (zc: number) =>
+      Math.max(radiusAt(tail, Math.min(zc + 0.05, top.z)), ...tailPts.filter((p) => p.z >= zc - w - EPS && p.z <= zc + 0.05).map((p) => p.r)) + 0.2;
+    const n = Math.max(1, Math.ceil((top.z - endZ) / (0.8 * w)));
+    out.unshift(
+      `(뒷면 Z${fmt(top.z)} ~ Z${fmt(endZ)} : 척 쪽을 바라보는 면은 외경 바이트가 못 깎으므로 끊기 전에 홈 바이트 오른쪽 날로 뒤에서. 쪼아 내려가 황삭 ${n + 1}번 → 형상을 따라 정삭)`,
+    );
+    out.push(...head);
+    for (let i = 0; i <= n; i++) {
+      const zc = endZ + ((top.z - endZ) * i) / n;
+      if (i) out.push(`G00 Z${fmt(zc - w)} ;`);
+      out.push(`G75 X${fmt(2 * Math.min(D / 2, depthAt(zc)))} Z${fmt(zc - w)} P1000 F0.05 ;`);
+    }
+    out.push(`G01 X${fmt(2 * top.r)} F0.05 ;`);
+    for (const m of tail) {
+      if (m.kind === 'line') out.push(`G01 X${fmt(2 * m.b.r)} Z${fmt(m.b.z - w)} ;`);
+      else out.push(`${m.ccw ? 'G03' : 'G02'} X${fmt(2 * m.b.r)} Z${fmt(m.b.z - w)} R${fmt(Math.hypot(m.a.z - m.c.z, m.a.r - m.c.r))} ;`);
+    }
+    // 끝이 축까지 내려오면 정삭으로 이미 끊겼다
+    if (endR > EPS) out.push(`G75 X0. Z${fmt(z)} P1000 F0.05 ;`);
+  }
+  out.push(`G00 X${fmt(D + 4)} ;`, 'G28 U0. W0. M09 ;', 'M05 ;');
+  return out;
 }
 
 const toolCode = (no: number) => `T${String(no).padStart(2, '0')}${String(no).padStart(2, '0')}`;
@@ -649,7 +701,10 @@ export function generateProgram(input: AutoInput): AutoProgram {
     );
   }
   code.push(`G40 G00 X${fmt(D + 50)} Z${fmt(faceZ + 50)} ;`, 'G28 U0. W0. M09 ;', 'M05 ;');
-  code.push(...grooveBlocks(finGrooves, profile, 1, input.tools.find((t) => t.type === 'groove'), faceZ, D));
+  // 척 쪽을 바라보는 면은 절단 전에 홈 바이트로 뒤에서 깎는다 → 척 쪽 끝 홈(2차 가공 안내)은 빼고
+  const grooveTool = input.tools.find((t) => t.type === 'groove');
+  const tail = canPartOff(grooveTool, endZ, prot) ? backTail(profile) : [];
+  code.push(...grooveBlocks(tail.length ? finGrooves.filter((g) => !g.toEnd) : finGrooves, profile, 1, grooveTool, faceZ, D));
   const adjust: ToolAdjust[] = [];
   if (innerRaw.length) code.push(...boreBlocks(faceFirst(innerRaw), faceZ, input, adjust, feat.threads.filter((t) => t.inner)));
 
@@ -761,7 +816,7 @@ export function generateProgram(input: AutoInput): AutoProgram {
       'M05 ;',
     );
   }
-  code.push(...partOffBlocks(input.tools.find((t) => t.type === 'groove'), endZ, D, prot, innerRaw));
+  code.push(...partOffBlocks(grooveTool, endZ, D, prot, innerRaw, tail));
   code.push('M30 ;');
   const has = (k: string) => code.some((l) => l.startsWith(k));
   const steps = [

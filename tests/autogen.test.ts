@@ -46,6 +46,27 @@ describe('절단', () => {
     expect(Math.max(...zs(sim.stock))).toBeLessThanOrEqual(-43 + 1e-3);
   });
 
+  it('머리 뒤 R (척 쪽을 바라보는 면) 은 끊기 전에 홈 바이트 오른쪽 날로 뒤에서 깎는다', () => {
+    // Ø6 나사부 + Ø7 몸통 + 양쪽 R2.5 둥근 머리 Ø12 (연습 도면과 같은 모양)
+    const drawing = 'X0. Z0.\nX5.\nX6. Z-0.5\nZ-7.\nX7.\nZ-19.5\nG03 X7. Z-24.5 R2.5\n';
+    const { gen, res } = cut(drawing, { diameter: 15, length: 55, grip: 20, faceAllowance: 1 });
+    expect(gen.code).toContain('(뒷면 Z-22. ~ Z-24.5 : 척 쪽을 바라보는 면은');
+    expect(gen.code).toContain('G01 X12. F0.05 ;\nG03 X7. Z-27.5 R2.5 ;\nG75 X0. Z-27.5 P1000 F0.05 ;');
+    expect(gen.code).not.toContain('2차 가공');
+    expect(gen.code).not.toContain('Infinity');
+    expect(res.maxExcess).toBeLessThan(0.02);
+    expect(res.maxOver).toBeLessThan(0.02);
+  });
+
+  it('척 쪽 끝이 축까지 내려오는 공 모양이면 뒷면 정삭이 축에 닿으면서 끊긴다 (G75 X0. 없이)', () => {
+    const drawing = 'X0. Z0.\nX10.\nZ-20.\nG03 X0. Z-25. R5.\n';
+    const { gen, res } = cut(drawing, { diameter: 15, length: 55, grip: 20, faceAllowance: 1 });
+    expect(gen.code).toContain('G03 X0. Z-28. R5. ;\nG00 X19. ;');
+    expect(gen.code).not.toContain('G75 X0.');
+    expect(res.maxExcess).toBeLessThan(0.02);
+    expect(res.maxOver).toBeLessThan(0.02);
+  });
+
   it('척에서 나온 길이가 모자라면 절단은 빼고 이유를 적는다', () => {
     const drawing = 'X0. Z0.\nX20.\nZ-68.\n';
     const gen = generateProgram({ drawing, stock, tools: cfg.tools, offsets: cfg.offsets });
