@@ -265,9 +265,10 @@ async function importDxf(f: File) {
       (r.threads ? ` · 나사 ${r.threads}` : '') +
       (r.knurls ? ` · 널링 ${r.knurls}` : '') +
       (r.flipped ? ` · 척 쪽 끝이 뾰족해서 끝면을 ${left.checked ? '왼쪽' : '오른쪽'}으로 바꿈` : '');
-    // 도면이 소재보다 크면 소재를 늘린다
+    // 소재를 도면에 맞춘다 (작으면 늘리고 너무 크면 줄임)
     const s = fitStock(settings.stock, r.maxDia, r.length);
-    if (s.diameter !== settings.stock.diameter || s.length !== settings.stock.length) {
+    const old = settings.stock;
+    if (s.diameter !== old.diameter || s.length !== old.length) {
       settings.stock = s;
       fillStockBar();
       view3d.setStockConfig(s);
@@ -275,7 +276,7 @@ async function importDxf(f: File) {
       view2d.fit();
       save();
       followAnswer();
-      dxfInfo.textContent += ` · 소재를 Ø${s.diameter} × ${s.length} 로 늘림`;
+      dxfInfo.textContent += ` · 소재를 Ø${old.diameter} × ${old.length} → Ø${s.diameter} × ${s.length} 로 맞춤`;
     }
   } catch (e) {
     dxfInfo.classList.add('err');

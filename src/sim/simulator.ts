@@ -26,15 +26,13 @@ export function normalizeStock(s: Partial<StockConfig> & { protrusion?: number }
 }
 
 /**
- * 도면(최대 지름 · 길이)이 들어가도록 소재를 늘린다. 이미 충분하면 그대로 (줄이지는 않는다).
+ * 도면(최대 지름 · 길이)에 맞는 소재. 작으면 늘리고 너무 크면 줄인다.
  * 지름은 한쪽 1mm 이상 여유를 두고 5mm 단위, 척에서 나온 길이는 도면 길이 + 10mm (끊기·공구 여유).
+ * 물림 길이 · 단면 여유는 그대로.
  */
 export function fitStock(s: StockConfig, maxDia: number, length: number): StockConfig {
-  const out = { ...s };
-  if (s.diameter < maxDia + 2) out.diameter = Math.ceil((maxDia + 2) / 5) * 5;
-  const need = Math.ceil(length + 10);
-  if (protrusionOf(s) < need) out.length = need + s.grip + s.faceAllowance;
-  return out;
+  const diameter = Math.ceil((maxDia + 2) / 5) * 5;
+  return { ...s, diameter, length: Math.ceil(length + 10) + s.grip + s.faceAllowance };
 }
 
 /** 척 조(jaw)가 차지하는 영역 */
