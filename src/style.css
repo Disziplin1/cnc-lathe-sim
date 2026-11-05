@@ -207,14 +207,28 @@ body.resizing {
   overflow: hidden;
 }
 .views.mode-2d #view3d,
-.views.mode-3d #view2d {
+.views.mode-3d #view2d,
+.views:not(.mode-both) .vsplit {
   display: none;
 }
+/* 둘 다: 2D | 경계 | 3D. 경계를 끌면 --top-h (2D 높이) 가 바뀐다 */
 .views.mode-both {
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: min(var(--top-h, calc(50% - 3px)), calc(100% - 86px)) 6px 1fr;
 }
-.views.mode-both #view2d {
+.vsplit {
+  cursor: row-resize;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
+  touch-action: none;
+}
+.vsplit:hover,
+.vsplit.dragging {
+  background: var(--accent);
+}
+body.resizing-v {
+  cursor: row-resize;
+  user-select: none;
 }
 
 .controls {

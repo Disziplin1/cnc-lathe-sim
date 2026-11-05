@@ -331,6 +331,53 @@ splitter.addEventListener('dblclick', () => {
   }
 });
 
+// 둘 다 보기: 2D | 3D 경계 끌기 (2D 높이를 px 로 저장)
+const VSPLIT_KEY = 'cnc-sim-vsplit';
+const viewsBox = $('views');
+const vsplit = $('vsplit');
+function setTopHeight(px: number | null) {
+  if (px === null) viewsBox.style.removeProperty('--top-h');
+  else {
+    const max = viewsBox.clientHeight - 6 - 80;
+    viewsBox.style.setProperty('--top-h', `${Math.round(Math.max(80, Math.min(max, px)))}px`);
+  }
+}
+try {
+  const h = parseFloat(localStorage.getItem(VSPLIT_KEY) ?? '');
+  if (h > 0) setTopHeight(h);
+} catch {
+  // 저장소를 못 쓰면 반반
+}
+vsplit.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  vsplit.setPointerCapture(e.pointerId);
+  vsplit.classList.add('dragging');
+  document.body.classList.add('resizing-v');
+  const top = viewsBox.getBoundingClientRect().top;
+  const move = (ev: PointerEvent) => setTopHeight(ev.clientY - top);
+  const up = () => {
+    vsplit.removeEventListener('pointermove', move);
+    vsplit.classList.remove('dragging');
+    document.body.classList.remove('resizing-v');
+    try {
+      localStorage.setItem(VSPLIT_KEY, String($('view2d').getBoundingClientRect().height));
+    } catch {
+      // 저장 못 해도 이번에는 적용됨
+    }
+  };
+  vsplit.addEventListener('pointermove', move);
+  vsplit.addEventListener('pointerup', up, { once: true });
+  vsplit.addEventListener('pointercancel', up, { once: true });
+});
+vsplit.addEventListener('dblclick', () => {
+  setTopHeight(null);
+  try {
+    localStorage.removeItem(VSPLIT_KEY);
+  } catch {
+    // 무시
+  }
+});
+
 // 왼쪽 탭: 프로그램 / 도면 / 모범 답안 / 코드 사전
 type Pane = 'prog' | 'dwg' | 'ans' | 'book';
 function showPane(pane: Pane) {
