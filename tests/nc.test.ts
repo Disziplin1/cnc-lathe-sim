@@ -148,6 +148,19 @@ describe('simulator', () => {
     expect(sim.advanceTo(p.duration)?.code).toBe('SIM02');
   });
 
+  it('출발점이 소재 안쪽이면 충돌 알람에 소재 지름을 알려 준다 (소재를 바꾼 뒤 예전 프로그램)', () => {
+    const big = { ...stock, diameter: 85 };
+    const p = compile(head + 'G00 X74. Z0. ;\n', cfg());
+    const a = new CutSim(p, big, defaultTools()).advanceTo(p.duration);
+    expect(a?.code).toBe('SIM02');
+    expect(a?.message).toContain('X74 Z0 가 소재 Ø85 안쪽');
+    // 도착점이 소재 밖이면(소재를 가로질러 지나감) 안내 없이 충돌만 알린다
+    const q = compile(head + 'G00 X40. Z2. ;\nX60. Z-20. ;\nZ-60. ;\nX40. Z-40. ;\n', cfg());
+    const b = new CutSim(q, stock, defaultTools()).advanceTo(q.duration);
+    expect(b?.code).toBe('SIM02');
+    expect(b?.message).not.toContain('안쪽입니다');
+  });
+
   it('외경 절삭 후 소재 반경이 줄어든다', () => {
     const p = compile(head + 'G00 X52. Z2. ;\nG90 X40. Z-30. F0.2 ;\nM30 ;\n', cfg());
     const sim = new CutSim(p, stock, defaultTools());

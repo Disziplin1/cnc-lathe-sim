@@ -222,7 +222,7 @@ export class CutSim {
     if (s.kind === 'rapid') {
       if (boxOverlap(box, this.stockBox) && intersectArea(this.stock, [toPath(sweep)]) > RAPID_HIT_AREA) {
         this.cut(sweep);
-        return alarmAt(s, 'SIM02', '급속이송(G00) 중에 공작물과 충돌했습니다');
+        return alarmAt(s, 'SIM02', '급속이송(G00) 중에 공작물과 충돌했습니다' + this.insideStockHint(s));
       }
       return this.farSide(s, sweep, box);
     }
@@ -248,6 +248,22 @@ export class CutSim {
       s,
       'SIM04',
       '공구가 축 건너편(구멍 반대쪽 벽)과 충돌했습니다. 구멍이 보링바보다 작거나, 공구가 중심을 너무 많이 넘어갔습니다',
+    );
+  }
+
+  /**
+   * 급속이송의 끝점이 처음 소재(깎기 전 원통) 안쪽이면, 소재를 바꾼 뒤 예전 프로그램을 돌린 경우가 많다.
+   * 출발점을 소재 지름보다 크게 하라고 알려 준다.
+   */
+  private insideStockHint(s: Segment): string {
+    const { diameter, length, faceAllowance } = this.stockCfg;
+    const end = s.pts[s.pts.length - 1];
+    if (!(end.r < diameter / 2 - 1e-6 && end.z < faceAllowance - 1e-6 && end.z > faceAllowance - length)) return '';
+    const x = Math.round(end.r * 2 * 1000) / 1000;
+    const z = Math.round(end.z * 1000) / 1000;
+    return (
+      `. 이 G00 의 도착점 X${x} Z${z} 가 소재 Ø${diameter} 안쪽입니다. ` +
+      `소재(또는 도면)를 바꿨다면 출발점 X 를 소재 지름보다 크게(예: X${diameter + 4}.) 고치거나, 모범 답안 탭의 ▶ 답안으로 시뮬레이션을 써 보세요`
     );
   }
 
