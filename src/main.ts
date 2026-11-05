@@ -353,7 +353,8 @@ let answerKey = '';
 const ansInfo = $('ans-info');
 /** 모범 답안을 돌리는 중에 도면 · 소재 · 공구가 바뀌면 답안도 바로 새로 만든다 (안 그러면 예전 도면의 답안이 돈다) */
 function followAnswer() {
-  if (active === ansEditor) makeAnswer(false);
+  // 답안으로 시뮬레이션 중이거나 답안 탭을 보고 있으면 (답안이 오류로 비어 있어도) 바로 다시 만든다
+  if (active === ansEditor || !$('editor-ans').hidden) makeAnswer(false);
 }
 
 function makeAnswer(force: boolean) {

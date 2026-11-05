@@ -1072,8 +1072,16 @@ class Interpreter {
     // (급속 이동끼리는 원래 엇갈릴 수 있으니 둘 중 하나는 절삭 이동일 때만)
     const flat = paths.flatMap((pth, mi) => pth.map((p) => ({ p, m: mi })));
     const feedSeg = (k: number) => body[flat[k + 1].m].kind !== 'rapid';
+    // 마지막 절삭 뒤의 급속(G70 이 시작점으로 돌아가는 이동 등)은 형상을 가로지르므로 잘라낼 고리로 보지 않는다
+    let lastFeed = -1;
+    body.forEach((m, mi) => {
+      if (m.kind !== 'rapid') lastFeed = mi;
+    });
+    const trailing = (k: number) => flat[k + 1].m > lastFeed;
     for (let i = 0; i + 1 < flat.length; i++) {
+      if (trailing(i)) break;
       for (let j = Math.min(flat.length - 2, i + 400); j >= i + 2; j--) {
+        if (trailing(j)) continue;
         if (!feedSeg(i) && !feedSeg(j)) continue;
         const X = segCross(flat[i].p, flat[i + 1].p, flat[j].p, flat[j + 1].p);
         if (X) {
@@ -1086,7 +1094,8 @@ class Interpreter {
     for (const f of flat) paths[f.m].push(f.p);
 
     // 노즈 중심 경로 → 가상 인선점 경로
-    const tipPaths = paths.map((pth) => pth.map((p) => add(p, tip)));
+    // 마지막 절삭 뒤의 급속은 보정하지 않고 지령한 점으로 (보정해서 옮기면 바닥·벽 쪽으로 파고들 수 있다)
+    const tipPaths = paths.map((pth, mi) => (mi > lastFeed && lastFeed >= 0 ? body[mi].pts.slice(1).map((p) => ({ ...p })) : pth.map((p) => add(p, tip))));
     emit(startup, [{ ...this.pos }, tipPaths.find((p) => p.length)![0]]);
     body.forEach((m, mi) => {
       if (tipPaths[mi].length) emit(m, [{ ...this.pos }, ...tipPaths[mi]]);

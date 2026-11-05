@@ -128,7 +128,8 @@ function envelope(moves: DrawingMove[], slope = 0): { out: DrawingMove[]; groove
       const rp = points(rest[j]);
       for (let i = 1; i < rp.length; i++) {
         minR = Math.min(minR, rp[i].r);
-        if (slope > 0 && fill(rp[i].z) < 0) break;
+        // 메우는 선이 축 아래로 내려간 뒤에는 더 찾지 않는다 (이 선분 안에서 만나는지는 먼저 본다)
+        if (slope > 0 && fill(rp[i - 1].z) < 0) break;
         if (rp[i].r >= fill(rp[i].z) - EPS && rp[i - 1].r < fill(rp[i - 1].z) - EPS && rp[i].z <= q.z + EPS) {
           found = j;
           if (slope === 0) hit = pointAtLevel(rest[j], q.r, rp[i]);

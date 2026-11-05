@@ -132,6 +132,13 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(res.maxExcess).toBeLessThan(0.02);
   });
 
+  it('단 있는 막힌 구멍: G70 G41 정삭이 단 아래 벽(Z-25 까지)도 깎고, 돌아오는 급속이 바닥을 파지 않는다', () => {
+    const drawing = ['X0. Z0.', 'X45.', 'Z-40.', '(내경)', 'X30. Z0.', 'X28. Z-1.', 'Z-10.', 'X20.', 'Z-25.', 'X0.'].join('\n');
+    const { res } = run(drawing, 20);
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.02);
+  });
+
   it('막힌 구멍 Ø24 깊이 15 (바닥 평평): 드릴 끝을 바닥에 맞추고 보링으로 벽 · 바닥 정리', () => {
     const drawing = ['X0. Z0.', 'X40.', 'Z-30.', '(내경)', 'X24. Z0.', 'Z-15.', 'X0.'].join('\n');
     const { gen, res } = run(drawing, 18);
@@ -298,6 +305,24 @@ describe('모범 답안: 둥근 형상 (G73)', () => {
     const sim = new CutSim(p, st, cfg.tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
     const res = compareStock(sim.stock, parseTarget(drawing).target!, [], 0.8 * 1.6 + 0.05);
+    expect(res.maxOver).toBeLessThan(0.02);
+    expect(res.maxExcess).toBeLessThan(0.05);
+  });
+
+  it('필렛에서 경사로 메운 선이 목(Ø7)과 만나면 거기서 형상으로 돌아온다 (척 쪽 Ø26 · Ø15 를 깎아 먹지 않음)', () => {
+    // 공 · 링 Ø10 · R1.5 필렛 목 Ø7 · Ø20 · 모따기 Ø26 · 척 쪽 Ø15 (사용자 도면 2)
+    const dr = [
+      'X0. Z0.', 'G03 X7.714 Z-14.875 R7.938', 'G01 X10.', 'Z-15.875', 'G02 X7. Z-17.375 R1.5', 'G01 Z-33.375',
+      'G02 X10. Z-34.875 R1.5', 'G01 X20.', 'X26. Z-40.071', 'Z-56.875', 'X15.', 'Z-71.875',
+    ].join('\n');
+    const st = { diameter: 30, length: 103, grip: 20, faceAllowance: 1 };
+    const gen = generateProgram({ drawing: dr, stock: st, tools: cfg.tools, offsets: cfg.offsets });
+    expect(gen.code).toContain('X7. Z-18.696 ;');
+    const p = compile(gen.code, cfg);
+    expect(p.alarm).toBeNull();
+    const sim = new CutSim(p, st, cfg.tools);
+    expect(sim.advanceTo(p.duration)).toBeNull();
+    const res = compareStock(sim.stock, parseTarget(dr).target!, [], 0.8 * 1.6 + 0.05);
     expect(res.maxOver).toBeLessThan(0.02);
     expect(res.maxExcess).toBeLessThan(0.05);
   });
