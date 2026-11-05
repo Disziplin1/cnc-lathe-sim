@@ -3,7 +3,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Vec } from '../nc/types';
 import { SCALE, type Paths } from '../sim/geometry';
 import { chuckBox, protrusionOf, type StockConfig } from '../sim/simulator';
-import type { ToolDef } from '../machine/tools';
+import { tapOutline, type ToolDef } from '../machine/tools';
+import { coarsePitch } from '../sim/features';
 
 const RADIAL = 72;
 
@@ -169,7 +170,19 @@ function buildTool(def: ToolDef, shape: Vec[], color: string): THREE.Group {
       g.add(box(-10, 10, 30, 110, -22, 6, holderMat));
       break;
     }
-    case 'tap':
+    case 'tap': {
+      // 나사산이 보이는 탭 (끝 물림부 → 나사산 → 가는 생크) + 탭 홀더
+      const pitch = coarsePitch(def.width) ?? 1;
+      const outline = tapOutline(def.width > 0 ? def.width : 6, pitch);
+      const body = new THREE.LatheGeometry([new THREE.Vector2(0, 0), ...outline.map((p) => new THREE.Vector2(p.r, p.z)), new THREE.Vector2(0, 60)], 48);
+      body.rotateZ(-Math.PI / 2);
+      g.add(new THREE.Mesh(body, new THREE.MeshStandardMaterial({ color: '#c9ced6', metalness: 0.85, roughness: 0.3, flatShading: true })));
+      const holder = new THREE.Mesh(new THREE.CylinderGeometry(rMax + 6, rMax + 6, 50, 40), holderMat);
+      holder.rotation.z = Math.PI / 2;
+      holder.position.x = 60 + 25;
+      g.add(holder);
+      break;
+    }
     case 'drill': {
       // 날끝 원뿔 + 몸통을 축 둘레로 회전시킨 모양
       const rr = rMax;

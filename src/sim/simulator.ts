@@ -1,5 +1,5 @@
 import type { Alarm, Program, Segment, Vec } from '../nc/types';
-import { toolShape, type ToolDef } from '../machine/tools';
+import { tapStamp, toolShape, type ToolDef } from '../machine/tools';
 import { bounds, boxOverlap, difference, fromPath, hull, intersectArea, intersection, rect, toPath, translate, type Box, type Paths } from './geometry';
 
 export interface StockConfig {
@@ -90,6 +90,8 @@ export class CutSim {
   private shapes = new Map<number, Vec[]>();
   private knurlTools = new Set<number>();
   private drillTools = new Set<number>();
+  /** 탭 공구 번호 → 호칭 지름 */
+  private tapDia = new Map<number, number>();
   private segIdx = 0;
   private edgeIdx = 1;
   private lastPt: Vec | null = null;
@@ -105,6 +107,7 @@ export class CutSim {
       this.shapes.set(t.no, toolShape(t));
       if (t.type === 'knurl') this.knurlTools.add(t.no);
       if (t.type === 'drill' || t.type === 'tap') this.drillTools.add(t.no);
+      if (t.type === 'tap') this.tapDia.set(t.no, t.width > 0 ? t.width : 6);
     }
     this.reset();
   }
@@ -187,13 +190,17 @@ export class CutSim {
 
   private move(s: Segment, shape: Vec[], a: Vec, b: Vec): Alarm | null {
     if (s.kind === 'thread') {
-      // 나사: 리드 간격마다 공구 형상을 찍어 단면의 톱니 모양을 만든다
+      // 나사: 리드 간격마다 공구 형상을 찍어 단면의 톱니 모양을 만든다.
+      // 탭은 산 하나짜리 모양을 찍고, 거꾸로 돌며 빠져나올 때(+Z)는 이미 낸 나사를 따라 나오므로 깎지 않는다
+      const tapDia = this.tapDia.get(s.tool);
+      if (tapDia !== undefined && b.z > a.z) return null;
+      const stamp = tapDia !== undefined ? tapStamp(tapDia, s.pitch) : shape;
       const len = dist(a, b);
       const t0 = this.travel;
       this.travel += len;
       while (this.nextStamp <= this.travel + 1e-9) {
         const f = len > 0 ? (this.nextStamp - t0) / len : 0;
-        this.cut(translate(shape, lerp(a, b, Math.min(Math.max(f, 0), 1))));
+        this.cut(translate(stamp, lerp(a, b, Math.min(Math.max(f, 0), 1))));
         this.nextStamp += s.pitch;
       }
       return null;

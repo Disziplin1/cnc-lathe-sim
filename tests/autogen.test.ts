@@ -193,6 +193,13 @@ describe('모범 답안: 내경 (드릴 → 보링 G71 → G70 G41)', () => {
     expect(taps[1].snap.spindle).toBe('M04');
     const sim = new CutSim(p, stock, tools);
     expect(sim.advanceTo(p.duration)).toBeNull();
+    // 구멍 벽에 암나사 톱니: 바닥 쪽(Z-2 ~ -6) 벽이 탭 드릴 반경(2.5) 과 호칭 반경(3) 사이를 오르내린다
+    const wall = sim.stock
+      .flatMap((path) => path.map((q) => ({ z: q.X / 1000, r: q.Y / 1000 })))
+      .filter((q) => q.z < -2 && q.z > -6 && q.r > 0.1 && q.r < 3.5);
+    expect(Math.max(...wall.map((q) => q.r))).toBeCloseTo(3, 1);
+    expect(Math.min(...wall.map((q) => q.r))).toBeCloseTo(2.5, 1);
+    expect(wall.filter((q) => q.r > 2.9).length).toBeGreaterThanOrEqual(3);
     // 없는 지름으로 설정된 드릴(Ø4.917)도 표준으로
     r = generateProgram({ drawing: ['X0. Z0.', 'X20.', 'Z-30.', '(내경)', 'X4.917 Z0.', 'Z-10.', 'X0.'].join('\n'), stock, tools: withDrill(4.917), offsets: cfg.offsets });
     expect(r.adjust[0].to).toBe(4.9);

@@ -1,4 +1,5 @@
 import type { Vec } from '../nc/types';
+import { coarsePitch } from '../sim/features';
 
 export type ToolType = 'rough' | 'finish' | 'groove' | 'thread' | 'drill' | 'boring' | 'knurl' | 'ithread' | 'igroove' | 'tap';
 
@@ -157,6 +158,46 @@ function rhombus(minor: number, major: number, R: number): Vec[] {
   return convexHull([...circle, A, B, C]);
 }
 
+/** 미터 나사: 안지름 반경 (호칭 - 1.0825P) / 2 */
+const minorRadius = (dia: number, pitch: number) => (dia - 1.0825 * pitch) / 2;
+
+/**
+ * 탭 위쪽 윤곽 (끝 → 생크, z 증가): 끝 2피치는 물림부(산이 점점 커짐), 그 뒤 나사산, 그 뒤 가는 생크.
+ * 3D 탭 모양과 2D 공구 그림에 쓴다.
+ */
+export function tapOutline(dia: number, pitch: number): Vec[] {
+  const R = dia / 2;
+  const r = minorRadius(dia, pitch);
+  const len = Math.min(Math.max(3 * dia, 10), 24);
+  const pts: Vec[] = [{ z: 0, r: r * 0.85 }];
+  for (let z = 0; z + pitch <= len + 1e-9; z += pitch) {
+    const crest = r + (R - r) * Math.min(1, (z + pitch / 2) / (2 * pitch));
+    pts.push({ z, r }, { z: z + pitch / 2, r: crest });
+  }
+  const end = pts[pts.length - 1].z + pitch / 2;
+  pts.push({ z: end, r }, { z: end + 2, r: r * 0.85 }, { z: 60, r: r * 0.85 });
+  return pts;
+}
+
+/**
+ * 탭이 나사 구멍을 깎는 모양: 안지름까지의 몸통 + 끝에서 한 피치 뒤의 60° 산 하나.
+ * 리드(피치) 간격마다 찍으면 구멍 벽에 톱니(암나사) 단면이 생긴다.
+ */
+export function tapStamp(dia: number, pitch: number): Vec[] {
+  const R = dia / 2;
+  const r = minorRadius(dia, pitch);
+  const half = (R - r) * Math.tan(30 * deg);
+  const c = pitch;
+  const upper = [
+    { z: 0, r },
+    { z: c - half, r },
+    { z: c, r: R },
+    { z: c + half, r },
+    { z: 60, r },
+  ];
+  return [...upper.map((p) => ({ z: p.z, r: -p.r })).reverse(), ...upper];
+}
+
 /**
  * 공구 인서트 윤곽 (공구 끝점 = 가상 인선점 기준, 볼록 다각형).
  * 우수 외경 공구가 공작물 위쪽(+X)에서 -Z 방향으로 깎는 배치.
@@ -228,16 +269,9 @@ export function toolShape(t: ToolDef): Vec[] {
       ];
     }
     case 'tap': {
-      // 기준점 = 탭 끝 (중심). 끝 1.5mm 는 물림부(모따기), 지름 = 호칭 지름
-      const rr = (t.width > 0 ? t.width : 6) / 2;
-      return [
-        { z: 0, r: -rr * 0.75 },
-        { z: 1.5, r: -rr },
-        { z: 60, r: -rr },
-        { z: 60, r: rr },
-        { z: 1.5, r: rr },
-        { z: 0, r: rr * 0.75 },
-      ];
+      // 기준점 = 탭 끝 (중심). 위쪽 톱니 윤곽을 아래로 뒤집어 붙인 모양
+      const upper = tapOutline(t.width > 0 ? t.width : 6, coarsePitch(t.width) ?? 1);
+      return [...upper.map((p) => ({ z: p.z, r: -p.r })).reverse(), ...upper];
     }
     case 'drill': {
       // 날끝각 118°, 기준점 = 드릴 끝 (중심)
