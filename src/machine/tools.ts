@@ -287,3 +287,41 @@ export function toolShape(t: ToolDef): Vec[] {
     }
   }
 }
+
+/** 공구 홀더 상자 (공구 좌표: z, 반경 r, 인서트 윗면에서 접선 방향 깊이 d) */
+export interface HolderBox {
+  z0: number;
+  z1: number;
+  r0: number;
+  r1: number;
+  d0: number;
+  d1: number;
+}
+
+/**
+ * 외경 바이트 · 홈 바이트의 홀더(헤드 · 생크 · 블레이드 · 블록). 3D 화면에 그리는 모양.
+ * 홀더는 공구 끝보다 척 쪽(-Z)으로 나오지 않는다: 단면을 깎을 때나 턱 앞까지 깎을 때 공구 끝 뒤는 아직 소재다
+ */
+export function holderBoxes(def: ToolDef, shape: Vec[]): HolderBox[] {
+  const zs = shape.map((p) => p.z);
+  const rs = shape.map((p) => p.r);
+  const [zMin, zMax, rMin, rMax] = [Math.min(...zs), Math.max(...zs), Math.min(...rs), Math.max(...rs)];
+  switch (def.type) {
+    case 'rough':
+    case 'finish':
+    case 'thread':
+      return [
+        { z0: zMin + 1, z1: zMax, r0: rMin + 2, r1: rMax, d0: -9, d1: -2.4 },
+        { z0: Math.max(zMin, 0) + 1, z1: Math.max(zMin, 0) + 21, r0: rMax - 2, r1: rMax + 80, d0: -22, d1: -2.4 },
+      ];
+    case 'groove': {
+      const w = zMax - zMin;
+      return [
+        { z0: zMin + w * 0.08, z1: zMax - w * 0.08, r0: 4, r1: 45, d0: -18, d1: 3 },
+        { z0: zMin + w * 0.08, z1: zMax + 18, r0: 45, r1: 110, d0: -22, d1: 3 },
+      ];
+    }
+    default:
+      return [];
+  }
+}

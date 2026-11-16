@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Vec } from '../nc/types';
 import { SCALE, type Paths } from '../sim/geometry';
 import { chuckBox, protrusionOf, type StockConfig } from '../sim/simulator';
-import { tapOutline, type ToolDef } from '../machine/tools';
+import { holderBoxes, tapOutline, type ToolDef } from '../machine/tools';
 import { coarsePitch } from '../sim/features';
 
 const RADIAL = 72;
@@ -117,27 +117,21 @@ function buildTool(def: ToolDef, shape: Vec[], color: string): THREE.Group {
   const tipMat = new THREE.MeshStandardMaterial({ color, metalness: 0.35, roughness: 0.45 });
   const zs = shape.map((p) => p.z);
   const rs = shape.map((p) => p.r);
-  const [zMin, zMax, rMin, rMax] = [Math.min(...zs), Math.max(...zs), Math.min(...rs), Math.max(...rs)];
+  const [zMin, zMax, , rMax] = [Math.min(...zs), Math.max(...zs), Math.min(...rs), Math.max(...rs)];
 
   switch (def.type) {
     case 'rough':
     case 'finish':
-    case 'thread': {
+    case 'thread':
       // 인서트(두께 4.8) + 인서트를 받치는 헤드 + 바깥으로 뻗은 생크(20 x 20)
       g.add(plate(shape, -2.4, 2.4, tipMat));
-      g.add(box(zMin + 1, zMax, rMin + 2, rMax, -9, -2.4, holderMat));
-      const zc = def.type === 'thread' ? 0 : (zMin + zMax) / 2 + 2;
-      g.add(box(zc - 10, zc + 10, rMax - 2, rMax + 80, -22, -2.4, holderMat));
+      for (const b of holderBoxes(def, shape)) g.add(box(b.z0, b.z1, b.r0, b.r1, b.d0, b.d1, holderMat));
       break;
-    }
-    case 'groove': {
+    case 'groove':
       // 날 끝(색) + 얇고 높은 블레이드 + 블록
-      const w = zMax - zMin;
       g.add(box(zMin, zMax, 0, 4, -3, 3, tipMat));
-      g.add(box(zMin + w * 0.08, zMax - w * 0.08, 4, 28, -18, 3, holderMat));
-      g.add(box(zMin - 2, zMax + 18, 28, 100, -22, 3, holderMat));
+      for (const b of holderBoxes(def, shape)) g.add(box(b.z0, b.z1, b.r0, b.r1, b.d0, b.d1, holderMat));
       break;
-    }
     case 'igroove':
     case 'ithread': {
       // 날 + 구멍 안으로 들어가는 가는 바 (축 = 날 끝보다 4 아래)
