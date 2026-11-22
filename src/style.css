@@ -362,6 +362,16 @@ table.tools th {
 table.tools input {
   width: 80px;
 }
+table.tools .order {
+  white-space: nowrap;
+}
+table.tools .order button {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+.tools-note {
+  margin: 8px 0 6px;
+}
 .dlg-actions {
   display: flex;
   justify-content: flex-end;

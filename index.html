@@ -168,10 +168,14 @@
           <legend>공구대</legend>
           <table class="tools">
             <thead>
-              <tr><th>번호</th><th>공구</th><th>홈 폭 / 드릴 직경</th><th>노즈 R</th></tr>
+              <tr><th>번호</th><th>공구</th><th>홈 폭 / 드릴 직경</th><th>노즈 R</th><th>순서</th></tr>
             </thead>
             <tbody id="s-tools"></tbody>
           </table>
+          <p class="muted small tools-note">
+            ▲▼ 로 공구를 다른 번호로 옮기면 공구 보정 줄도 같이 옮겨집니다. 프로그램의 T 번호는 그대로이니 직접 짠 프로그램은 바꾼 번호에 맞게 고쳐 주세요 (모범 답안은 알아서 맞춰짐)
+          </p>
+          <button type="button" id="s-tools-reset" title="공구대와 공구 보정을 처음 상태로 (적용을 눌러야 바뀜)">공구 초기화</button>
         </fieldset>
         <div class="dlg-actions">
           <button value="cancel">취소</button>

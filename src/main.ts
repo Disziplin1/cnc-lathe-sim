@@ -928,34 +928,77 @@ $('btn-settings').onclick = () => {
   num('s-rapid').value = String(settings.rapidRate);
   num('s-maxrpm').value = String(settings.maxRpm);
   $<HTMLSelectElement>('s-decimal').value = settings.decimalMode;
-  const body = $('s-tools');
-  body.replaceChildren();
-  for (let n = 1; n <= MAX_TOOLS; n++) {
-    const t = settings.tools.find((x) => x.no === n);
-    const tr = document.createElement('tr');
-    const opts = (['', 'rough', 'finish', 'groove', 'igroove', 'thread', 'ithread', 'boring', 'drill', 'tap', 'knurl'] as const)
-      .map((k) => `<option value="${k}" ${(t?.type ?? '') === k ? 'selected' : ''}>${k ? TOOL_LABEL[k] : '— 없음 —'}</option>`)
-      .join('');
-    tr.innerHTML = `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td><td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td><td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>`;
-    body.append(tr);
-  }
+  pendTools = Array.from({ length: MAX_TOOLS }, (_, i) => {
+    const t = settings.tools.find((x) => x.no === i + 1);
+    return t ? { ...t } : null;
+  });
+  pendOffsets = settings.offsets.map((o) => ({ ...o }));
+  renderToolRows();
   dlg.showModal();
 };
+/** 설정 창에서 고치는 중인 공구대(번호 1~12, 빈 칸은 null) · 공구 보정. 적용을 눌러야 설정에 들어간다 */
+let pendTools: (ToolDef | null)[] = [];
+let pendOffsets: ToolOffset[] = [];
+const TOOL_CHOICES = ['', 'rough', 'finish', 'groove', 'igroove', 'thread', 'ithread', 'boring', 'drill', 'tap', 'knurl'] as const;
+
+/** 화면에 적힌 값을 pendTools 로 읽는다 (순서 바꾸기 · 적용 전에) */
+function readToolRows() {
+  pendTools = pendTools.map((_, i) => {
+    const no = i + 1;
+    const type = dlg.querySelector<HTMLSelectElement>(`select[data-no="${no}"]`)!.value as ToolType | '';
+    if (!type) return null;
+    const w = parseFloat(dlg.querySelector<HTMLInputElement>(`input[data-w="${no}"]`)!.value) || 3;
+    const nr = parseFloat(dlg.querySelector<HTMLInputElement>(`input[data-nr="${no}"]`)!.value) || 0;
+    return { no, type, width: USES_WIDTH.includes(type) ? w : 3, noseR: USES_NOSE.includes(type) ? Math.max(0, nr) : 0 };
+  });
+}
+
+function renderToolRows() {
+  const body = $('s-tools');
+  body.replaceChildren();
+  pendTools.forEach((t, i) => {
+    const n = i + 1;
+    const tr = document.createElement('tr');
+    const opts = TOOL_CHOICES.map((k) => `<option value="${k}" ${(t?.type ?? '') === k ? 'selected' : ''}>${k ? TOOL_LABEL[k] : '— 없음 —'}</option>`).join('');
+    tr.innerHTML =
+      `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td>` +
+      `<td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td>` +
+      `<td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>` +
+      `<td class="order"><button type="button" data-move="${i}" data-dir="-1" title="위 번호로" ${i === 0 ? 'disabled' : ''}>▲</button> ` +
+      `<button type="button" data-move="${i}" data-dir="1" title="아래 번호로" ${i === pendTools.length - 1 ? 'disabled' : ''}>▼</button></td>`;
+    body.append(tr);
+  });
+}
+
+// 공구를 옆 번호와 바꾼다 (공구 보정 줄도 같이)
+$('s-tools').addEventListener('click', (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-move]');
+  if (!b) return;
+  readToolRows();
+  const i = Number(b.dataset.move);
+  const j = i + Number(b.dataset.dir);
+  if (j < 0 || j >= pendTools.length) return;
+  [pendTools[i], pendTools[j]] = [pendTools[j], pendTools[i]];
+  [pendOffsets[i], pendOffsets[j]] = [pendOffsets[j], pendOffsets[i]];
+  pendTools.forEach((t, k) => t && (t.no = k + 1));
+  renderToolRows();
+  dlg.querySelector<HTMLButtonElement>(`button[data-move="${j}"][data-dir="${b.dataset.dir}"]`)?.focus();
+});
+
+$('s-tools-reset').onclick = () => {
+  pendTools = Array.from({ length: MAX_TOOLS }, (_, i) => defaultTools().find((t) => t.no === i + 1) ?? null);
+  pendOffsets = defaultOffsets();
+  renderToolRows();
+};
+
 dlg.addEventListener('close', () => {
   if (dlg.returnValue !== 'ok') return;
   const v = (id: string, def: number) => {
     const x = parseFloat(num(id).value);
     return Number.isFinite(x) ? x : def;
   };
-  const tools: ToolDef[] = [];
-  dlg.querySelectorAll<HTMLSelectElement>('select[data-no]').forEach((s) => {
-    if (!s.value) return;
-    const no = Number(s.dataset.no);
-    const type = s.value as ToolType;
-    const w = parseFloat(dlg.querySelector<HTMLInputElement>(`input[data-w="${no}"]`)!.value) || 3;
-    const nr = parseFloat(dlg.querySelector<HTMLInputElement>(`input[data-nr="${no}"]`)!.value) || 0;
-    tools.push({ no, type, width: USES_WIDTH.includes(type) ? w : 3, noseR: USES_NOSE.includes(type) ? Math.max(0, nr) : 0 });
-  });
+  readToolRows();
+  const tools = pendTools.filter((t): t is ToolDef => t !== null);
   settings = {
     stock: settings.stock,
     homeX: v('s-homex', 200),
@@ -964,7 +1007,7 @@ dlg.addEventListener('close', () => {
     maxRpm: Math.max(100, v('s-maxrpm', 4000)),
     decimalMode: $<HTMLSelectElement>('s-decimal').value as DecimalMode,
     tools,
-    offsets: settings.offsets,
+    offsets: pendOffsets,
   };
   view3d.setStockConfig(settings.stock);
   rebuild();
