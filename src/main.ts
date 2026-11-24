@@ -964,7 +964,7 @@ function renderToolRows() {
       `<td class="mono">T${String(n).padStart(2, '0')}</td><td><select data-no="${n}">${opts}</select></td>` +
       `<td><input type="number" min="0.5" max="40" step="0.5" data-w="${n}" value="${t?.width ?? 3}" /></td>` +
       `<td><input type="number" min="0" max="2" step="0.1" data-nr="${n}" value="${t?.noseR ?? 0}" /></td>` +
-      `<td class="order"><button type="button" data-move="${i}" data-dir="-1" title="위 번호로" ${i === 0 ? 'disabled' : ''}>▲</button> ` +
+      `<td class="order"><span class="drag" data-drag="${i}" title="끌어서 다른 번호로 옮기기">⠿</span> <button type="button" data-move="${i}" data-dir="-1" title="위 번호로" ${i === 0 ? 'disabled' : ''}>▲</button> ` +
       `<button type="button" data-move="${i}" data-dir="1" title="아래 번호로" ${i === pendTools.length - 1 ? 'disabled' : ''}>▼</button></td>`;
     body.append(tr);
   });
@@ -983,6 +983,51 @@ $('s-tools').addEventListener('click', (e) => {
   pendTools.forEach((t, k) => t && (t.no = k + 1));
   renderToolRows();
   dlg.querySelector<HTMLButtonElement>(`button[data-move="${j}"][data-dir="${b.dataset.dir}"]`)?.focus();
+});
+
+/** 공구를 from 번호에서 to 번호로 옮기고, 사이에 있던 공구는 한 칸씩 민다 (공구 보정 줄도 같이) */
+function moveToolRow(from: number, to: number) {
+  if (from === to) return;
+  readToolRows();
+  const [t] = pendTools.splice(from, 1);
+  pendTools.splice(to, 0, t);
+  const [o] = pendOffsets.splice(from, 1);
+  pendOffsets.splice(to, 0, o);
+  pendTools.forEach((x, k) => x && (x.no = k + 1));
+  renderToolRows();
+}
+
+// 손잡이(⠿)를 끌어서 다른 줄에 놓기
+$('s-tools').addEventListener('pointerdown', (e) => {
+  const handle = (e.target as HTMLElement).closest<HTMLElement>('[data-drag]');
+  if (!handle) return;
+  e.preventDefault();
+  const body = $('s-tools');
+  const from = Number(handle.dataset.drag);
+  const rows = () => [...body.querySelectorAll('tr')];
+  rows()[from].classList.add('dragging');
+  let to = from;
+  const move = (ev: PointerEvent) => {
+    const list = rows();
+    // 포인터가 있는 줄 (위·아래 밖이면 맨 끝 줄)
+    let k = list.findIndex((tr) => ev.clientY < tr.getBoundingClientRect().bottom);
+    if (k < 0) k = list.length - 1;
+    to = k;
+    list.forEach((tr, i) => {
+      tr.classList.toggle('drop-above', i === to && to < from);
+      tr.classList.toggle('drop-below', i === to && to > from);
+    });
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    rows().forEach((tr) => tr.classList.remove('dragging', 'drop-above', 'drop-below'));
+    moveToolRow(from, to);
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
 });
 
 $('s-tools-reset').onclick = () => {
